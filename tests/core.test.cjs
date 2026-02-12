@@ -193,6 +193,7 @@ test('buildUiStyles provides shadcn-style tokens and button variants', () => {
   assert.match(css, /text-decoration-style:dashed/);
   assert.match(css, /\.docs-md-square-check\{/);
   assert.match(css, /\.docs-md-group-separator\{/);
+  assert.match(css, /\.docs-md-inline-field\{/);
 });
 
 test('buildPanelMarkup keeps required ids and shadcn-style structure', () => {
@@ -201,6 +202,7 @@ test('buildPanelMarkup keeps required ids and shadcn-style structure', () => {
   assert.match(html, /id="docs-md-image-mode"/);
   assert.match(html, /id="docs-md-image-mode" type="checkbox"/);
   assert.doesNotMatch(html, /<select id="docs-md-image-mode"/);
+  assert.match(html, /class="docs-md-field docs-md-inline-field"/);
   assert.match(html, /id="docs-md-scan"/);
   assert.match(html, /id="docs-md-export"/);
   assert.match(html, /id="docs-md-stop"/);
@@ -220,22 +222,24 @@ test('buildPanelMarkup removes shadcn-inspired subtitle text', () => {
   assert.doesNotMatch(html, /shadcn-inspired UI/);
 });
 
-test('buildUiStyles includes snake-like scan button edge animation hooks', () => {
+test('buildUiStyles includes stateful scan button loading/success animation hooks', () => {
   const css = crawler.buildUiStyles();
   assert.match(css, /\.docs-md-btn-scan/);
+  assert.match(css, /\.docs-md-btn-stateful/);
   assert.match(css, /\.docs-md-btn-scan\.is-scanning::before/);
-  assert.match(css, /@keyframes docs-md-scan-snake/);
+  assert.match(css, /\.docs-md-btn-scan\.is-done::after/);
+  assert.match(css, /@keyframes docs-md-btn-spin/);
+  assert.match(css, /@keyframes docs-md-btn-check-pop/);
 });
 
-test('buildUiStyles includes export button water-wave and edge percent hooks', () => {
+test('buildUiStyles includes stateful export button loading/success animation hooks', () => {
   const css = crawler.buildUiStyles();
   assert.match(css, /\.docs-md-btn-export/);
   assert.match(css, /\.docs-md-btn-export\.is-exporting::before/);
-  assert.match(css, /\.docs-md-btn-export\.is-exporting::after/);
+  assert.match(css, /\.docs-md-btn-export\.is-done::after/);
   assert.match(css, /\.docs-md-btn-export\.is-exporting \.docs-md-btn-label/);
   assert.match(css, /\.docs-md-tree-toggle/);
   assert.match(css, /\.docs-md-square-check/);
-  assert.match(css, /@keyframes docs-md-export-wave/);
   assert.match(css, /\.docs-md-hidden\{display:none/);
 });
 

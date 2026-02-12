@@ -546,6 +546,9 @@
       '#docs-md-close:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px}',
       '#docs-md-body{padding:12px;display:flex;flex-direction:column;gap:10px;overflow:auto}',
       '.docs-md-field{display:flex;flex-direction:column;gap:6px}',
+      '.docs-md-inline-field{flex-direction:row;align-items:center;justify-content:space-between;gap:10px}',
+      '.docs-md-inline-field .docs-md-label{margin:0;white-space:nowrap}',
+      '.docs-md-inline-field .docs-md-switch{margin-left:auto}',
       '.docs-md-label{font-size:12px;color:hsl(var(--muted-foreground));font-weight:600}',
       '.docs-md-switch{display:inline-flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid hsl(var(--input));border-radius:var(--radius);background:hsl(var(--background));min-height:38px;cursor:pointer;user-select:none}',
       '.docs-md-switch-option{font-size:12px;font-weight:600;color:hsl(var(--muted-foreground));line-height:1}',
@@ -568,20 +571,17 @@
       '.docs-md-btn-outline:hover{background:hsl(var(--secondary));color:hsl(var(--secondary-foreground))}',
       '.docs-md-btn-destructive{background:hsl(var(--destructive));color:hsl(var(--destructive-foreground))}',
       '.docs-md-btn-destructive:hover{background:hsl(var(--destructive) / .9)}',
-      '.docs-md-btn-scan{position:relative;z-index:0}',
-      '.docs-md-btn-scan::before{content:"";position:absolute;inset:-1.5px;border-radius:inherit;padding:1.5px;background:conic-gradient(from 0deg,transparent 0deg,transparent 286deg,hsla(190,95%,68%,.95) 326deg,hsla(190,95%,68%,.95) 344deg,transparent 360deg);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:0;pointer-events:none;transform:rotate(0deg)}',
-      '.docs-md-btn-scan.is-scanning::before{opacity:1;animation:docs-md-scan-snake 1.1s linear infinite}',
-      '.docs-md-btn-scan.is-scanning{box-shadow:0 0 0 1px hsla(190,95%,68%,.35),0 0 18px -8px hsla(190,95%,68%,.95)}',
-      '@keyframes docs-md-scan-snake{to{transform:rotate(360deg)}}',
-      '.docs-md-btn-export{position:relative;overflow:hidden;isolation:isolate}',
-      '.docs-md-btn-export::before{content:"";position:absolute;inset:-1.5px;border-radius:inherit;padding:1.5px;background:conic-gradient(from 180deg,transparent 0deg,transparent 300deg,hsla(198,98%,72%,.95) 330deg,hsla(198,98%,72%,.95) 346deg,transparent 360deg);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:0;pointer-events:none}',
-      '.docs-md-btn-export::after{content:attr(data-progress);position:absolute;top:-8px;right:-4px;padding:1px 6px;border-radius:999px;background:hsl(var(--background));border:1px solid hsl(var(--border));font-size:10px;line-height:1.45;font-weight:700;color:hsl(var(--muted-foreground));opacity:0;transform:translateY(-2px);transition:opacity .2s ease,transform .2s ease;pointer-events:none}',
-      '.docs-md-btn-label{display:inline-block}',
-      '.docs-md-btn-export.is-exporting::before{opacity:1;animation:docs-md-export-ring 1.6s linear infinite}',
-      '.docs-md-btn-export.is-exporting::after{opacity:1;transform:translateY(0)}',
-      '.docs-md-btn-export.is-exporting .docs-md-btn-label{background:linear-gradient(90deg,hsla(210,40%,98%,.25) 0%,hsla(198,98%,76%,1) 40%,hsla(210,40%,98%,.25) 70%,hsla(210,40%,98%,.25) 100%);background-size:220% 100%;background-position:0 50%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:docs-md-export-wave 1.1s ease-in-out infinite}',
-      '@keyframes docs-md-export-ring{to{transform:rotate(360deg)}}',
-      '@keyframes docs-md-export-wave{0%{background-position:0 50%;transform:translateY(0)}50%{background-position:100% 50%;transform:translateY(-1px)}100%{background-position:220% 50%;transform:translateY(0)}}',
+      '.docs-md-btn-stateful{position:relative;display:inline-flex;align-items:center;justify-content:center;overflow:hidden}',
+      '.docs-md-btn-label{display:inline-flex;align-items:center;justify-content:center;transition:transform .2s ease,opacity .2s ease}',
+      '.docs-md-btn-stateful::before,.docs-md-btn-stateful::after{position:absolute;left:10px;top:50%;transform:translateY(-50%) scale(0);opacity:0;pointer-events:none}',
+      '.docs-md-btn-stateful::before{content:"";width:14px;height:14px;border-radius:999px;border:2px solid currentColor;border-right-color:transparent}',
+      '.docs-md-btn-stateful::after{content:"✓";font-size:12px;font-weight:900;line-height:1;color:currentColor}',
+      '.docs-md-btn-scan.is-scanning::before,.docs-md-btn-export.is-exporting::before{opacity:.95;transform:translateY(-50%) scale(1);animation:docs-md-btn-spin .75s linear infinite}',
+      '.docs-md-btn-scan.is-scanning .docs-md-btn-label,.docs-md-btn-export.is-exporting .docs-md-btn-label{transform:translateX(8px)}',
+      '.docs-md-btn-scan.is-done::after,.docs-md-btn-export.is-done::after{opacity:1;transform:translateY(-50%) scale(1);animation:docs-md-btn-check-pop .42s ease}',
+      '.docs-md-btn-scan.is-done .docs-md-btn-label,.docs-md-btn-export.is-done .docs-md-btn-label{transform:translateX(8px)}',
+      '@keyframes docs-md-btn-spin{to{transform:translateY(-50%) scale(1) rotate(360deg)}}',
+      '@keyframes docs-md-btn-check-pop{0%{opacity:0;transform:translateY(-50%) scale(.35)}65%{opacity:1;transform:translateY(-50%) scale(1.12)}100%{opacity:1;transform:translateY(-50%) scale(1)}}',
       '.docs-md-surface{border:1px solid hsl(var(--border));border-radius:var(--radius);background:hsl(var(--background));padding:10px}',
       '#docs-md-status{display:flex;gap:8px;align-items:flex-start;justify-content:space-between}',
       '#docs-md-status-text{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11px;line-height:1.45;flex:1;min-width:0;color:hsl(var(--foreground))}',
@@ -634,7 +634,7 @@
       '  <button id="docs-md-close" type="button" aria-label="关闭面板">×</button>',
       '</div>',
       '<div id="docs-md-body">',
-      '  <div class="docs-md-field">',
+      '  <div class="docs-md-field docs-md-inline-field">',
       '    <label class="docs-md-label" for="docs-md-image-mode">图片模式</label>',
       '    <label class="docs-md-switch" for="docs-md-image-mode">',
       '      <span class="docs-md-switch-option">外链</span>',
@@ -644,8 +644,8 @@
       '    </label>',
       '  </div>',
       '  <div id="docs-md-actions">',
-      '    <button id="docs-md-scan" type="button" class="docs-md-btn docs-md-btn-primary docs-md-btn-scan">扫描目录</button>',
-      '    <button id="docs-md-export" type="button" class="docs-md-btn docs-md-btn-secondary docs-md-btn-export" data-progress="0%"><span class="docs-md-btn-label">导出 ZIP</span></button>',
+      '    <button id="docs-md-scan" type="button" class="docs-md-btn docs-md-btn-primary docs-md-btn-scan docs-md-btn-stateful"><span class="docs-md-btn-label">扫描目录</span></button>',
+      '    <button id="docs-md-export" type="button" class="docs-md-btn docs-md-btn-secondary docs-md-btn-export docs-md-btn-stateful" data-progress="0%"><span class="docs-md-btn-label">导出 ZIP</span></button>',
       '    <button id="docs-md-stop" type="button" class="docs-md-btn docs-md-btn-destructive">停止</button>',
       '  </div>',
       '  <div id="docs-md-status" class="docs-md-surface">',
@@ -705,6 +705,8 @@
     currentUrl: '',
     scanStartUrl: '',
     failedSeq: 0,
+    scanSuccessTimer: 0,
+    exportSuccessTimer: 0,
     elements: {},
     scanSession: 0
   };
@@ -755,6 +757,7 @@
       checkAllWrap: panel.querySelector('#docs-md-check-all-wrap'),
       checkAll: panel.querySelector('#docs-md-check-all')
     };
+    state.elements.scanBtnLabel = state.elements.scanBtn.querySelector('.docs-md-btn-label');
     state.elements.exportBtnLabel = state.elements.exportBtn.querySelector('.docs-md-btn-label');
 
     state.elements.fab.addEventListener('click', () => {
@@ -1031,8 +1034,16 @@
     if (!state.elements.scanBtn) {
       return;
     }
-    state.elements.scanBtn.classList.toggle('is-scanning', Boolean(scanning));
-    state.elements.scanBtn.setAttribute('aria-busy', scanning ? 'true' : 'false');
+    const busy = Boolean(scanning);
+    state.elements.scanBtn.classList.toggle('is-scanning', busy);
+    state.elements.scanBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
+    if (busy) {
+      state.elements.scanBtn.classList.remove('is-done');
+      if (state.scanSuccessTimer) {
+        clearTimeout(state.scanSuccessTimer);
+        state.scanSuccessTimer = 0;
+      }
+    }
   }
 
   function setExportButtonProgress(percent) {
@@ -1058,6 +1069,13 @@
     state.elements.exportBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
     state.elements.exportBtn.disabled = busy;
     if (busy) {
+      state.elements.exportBtn.classList.remove('is-done');
+      if (state.exportSuccessTimer) {
+        clearTimeout(state.exportSuccessTimer);
+        state.exportSuccessTimer = 0;
+      }
+    }
+    if (busy) {
       setExportButtonProgress(0);
       return;
     }
@@ -1067,6 +1085,22 @@
     } else {
       state.elements.exportBtn.textContent = EXPORT_BUTTON_IDLE_TEXT;
     }
+  }
+
+  function playStatefulButtonSuccess(buttonEl, timerKey) {
+    if (!buttonEl || !timerKey) {
+      return;
+    }
+    const currentTimer = state[timerKey];
+    if (currentTimer) {
+      clearTimeout(currentTimer);
+      state[timerKey] = 0;
+    }
+    buttonEl.classList.add('is-done');
+    state[timerKey] = setTimeout(() => {
+      buttonEl.classList.remove('is-done');
+      state[timerKey] = 0;
+    }, 1400);
   }
 
   function flushPauseResolvers() {
@@ -1626,6 +1660,7 @@
     state.currentUrl = '';
     state.doneCount = 0;
     updateProgress('开始扫描当前页面及其子链接...');
+    let scanSucceeded = false;
 
     try {
       const urls = await discoverUrls({
@@ -1648,12 +1683,16 @@
       state.queueCount = 0;
       state.currentUrl = '';
       updateProgress('扫描完成，可勾选后导出');
+      scanSucceeded = true;
     } catch (err) {
       renderTree(state.discoveredUrls);
       setStatus('扫描失败: ' + (err && err.message ? err.message : 'unknown'));
     } finally {
       state.scanning = false;
       setScanButtonBusy(false);
+      if (scanSucceeded) {
+        playStatefulButtonSuccess(state.elements.scanBtn, 'scanSuccessTimer');
+      }
       resetPauseState();
     }
   }
@@ -1755,6 +1794,7 @@
     const turndown = createTurndownService();
     const usedPaths = new Set();
     const pageDrafts = [];
+    let exportSucceeded = false;
 
     try {
       updateExportStage('页面抓取', 0, selected.length);
@@ -1896,12 +1936,16 @@
       a.remove();
       setTimeout(() => URL.revokeObjectURL(objUrl), 8000);
       updateProgress('导出完成: ' + state.doneCount + ' 页');
+      exportSucceeded = true;
     } catch (err) {
       setStatus('导出失败: ' + (err && err.message ? err.message : 'unknown'));
     } finally {
       state.currentUrl = '';
       state.exporting = false;
       setExportButtonBusy(false);
+      if (exportSucceeded) {
+        playStatefulButtonSuccess(state.elements.exportBtn, 'exportSuccessTimer');
+      }
       resetPauseState();
     }
   }
