@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.1.0
+// @version      0.2.0
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -27,7 +27,6 @@
 
   const DEFAULT_EXCLUDES = ['/api/', '/login', '/admin', 'token='];
   const DEFAULTS = {
-    maxPages: 300,
     maxDepth: 6,
     requestDelayMs: 300,
     timeoutMs: 15000,
@@ -198,6 +197,138 @@
     return prefix + down.join('/');
   }
 
+  function getRelativePathSegments(targetUrl, startUrl) {
+    try {
+      const target = new URL(normalizeUrl(targetUrl) || targetUrl);
+      const start = new URL(normalizeUrl(startUrl) || startUrl);
+      const targetSegments = splitPathSegments(target.pathname);
+      const startSegments = splitPathSegments(start.pathname);
+      let index = 0;
+      while (index < startSegments.length && targetSegments[index] === startSegments[index]) {
+        index += 1;
+      }
+      return targetSegments.slice(index);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function buildTreeItems(pages, startUrl) {
+    const root = {
+      pages: [],
+      groups: new Map()
+    };
+
+    function ensureGroup(node, segment) {
+      if (!node.groups.has(segment)) {
+        node.groups.set(segment, {
+          pages: [],
+          groups: new Map()
+        });
+      }
+      return node.groups.get(segment);
+    }
+
+    const sortedPages = (pages || []).slice().sort((a, b) => a.url.localeCompare(b.url));
+    for (const page of sortedPages) {
+      const relSegments = getRelativePathSegments(page.url, startUrl);
+      let cursor = root;
+      for (let i = 0; i < relSegments.length - 1; i += 1) {
+        cursor = ensureGroup(cursor, relSegments[i]);
+      }
+      cursor.pages.push({
+        type: 'page',
+        url: page.url,
+        title: getDisplayTitle(page.url, page.title || ''),
+        depth: Math.max(0, relSegments.length - 1)
+      });
+    }
+
+    const entries = [];
+    function walk(node, depth) {
+      node.pages
+        .slice()
+        .sort((a, b) => a.url.localeCompare(b.url))
+        .forEach((page) => {
+          entries.push({
+            type: 'page',
+            url: page.url,
+            title: page.title,
+            depth
+          });
+        });
+
+      Array.from(node.groups.keys())
+        .sort((a, b) => a.localeCompare(b))
+        .forEach((segment) => {
+          const groupNode = node.groups.get(segment);
+          entries.push({
+            type: 'group',
+            key: segment + ':' + depth,
+            title: sanitizeSegment(decodeURIComponent(segment), 'index'),
+            depth
+          });
+          walk(groupNode, depth + 1);
+        });
+    }
+
+    walk(root, 0);
+    return entries;
+  }
+
+  function computeSelectAllState(total, selected) {
+    if (!total || total <= 0) {
+      return { checked: false, indeterminate: false };
+    }
+    if (selected <= 0) {
+      return { checked: false, indeterminate: false };
+    }
+    if (selected >= total) {
+      return { checked: true, indeterminate: false };
+    }
+    return { checked: false, indeterminate: true };
+  }
+
+  function computeStageProgress(completed, total) {
+    if (!total || total <= 0) {
+      return { completed: 0, total: 0, percent: 100 };
+    }
+    const bounded = Math.min(Math.max(completed, 0), total);
+    const percent = Math.round((bounded / total) * 100);
+    return { completed: bounded, total, percent };
+  }
+
+  function formatBytes(bytes) {
+    const value = Number(bytes) || 0;
+    if (value >= 1024 * 1024) {
+      return (value / (1024 * 1024)).toFixed(2) + ' MB';
+    }
+    if (value >= 1024) {
+      return (value / 1024).toFixed(2) + ' KB';
+    }
+    return value.toFixed(0) + ' B';
+  }
+
+  function formatDuration(ms) {
+    return (Math.max(0, Number(ms) || 0) / 1000).toFixed(1) + 's';
+  }
+
+  function formatUsageStats(stats) {
+    const htmlBytes = Number(stats.htmlBytes) || 0;
+    const imageBytes = Number(stats.imageBytes) || 0;
+    const totalBytes = htmlBytes + imageBytes;
+    const pageFetched = Number(stats.pageFetched) || 0;
+    const pageConverted = Number(stats.pageConverted) || 0;
+    const imagesDownloaded = Number(stats.imagesDownloaded) || 0;
+    const failedCount = Number(stats.failedCount) || 0;
+    const elapsedMs = Number(stats.elapsedMs) || 0;
+
+    return [
+      '占用: HTML ' + formatBytes(htmlBytes) + ' | 图片 ' + formatBytes(imageBytes) + ' | 总计 ' + formatBytes(totalBytes),
+      '任务: 页面抓取 ' + pageFetched + ' | 页面转换 ' + pageConverted + ' | 图片下载 ' + imagesDownloaded + ' | 失败 ' + failedCount + ' | 耗时 ' + formatDuration(elapsedMs)
+    ].join('\n');
+  }
+
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -300,6 +431,10 @@
       isDocUrl,
       buildMarkdownPath,
       getDisplayTitle,
+      buildTreeItems,
+      computeSelectAllState,
+      computeStageProgress,
+      formatUsageStats,
       normalizeRootPath,
       sanitizeSegment,
       relativePath
@@ -317,6 +452,7 @@
     failCount: 0,
     queueCount: 0,
     currentUrl: '',
+    scanStartUrl: '',
     elements: {},
     scanSession: 0
   };
@@ -329,19 +465,24 @@
       '#docs-md-head{padding:10px 12px;background:linear-gradient(130deg,#f6f9ff 0%,#e8f0ff 100%);border-bottom:1px solid #e3e7ee;display:flex;justify-content:space-between;align-items:center;font-weight:700}',
       '#docs-md-body{padding:10px 12px;display:flex;flex-direction:column;gap:8px;overflow:auto}',
       '#docs-md-body input,#docs-md-body select{width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #c9d0db;border-radius:8px;background:#fff}',
-      '#docs-md-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}',
       '#docs-md-actions{display:flex;gap:8px;flex-wrap:wrap}',
       '#docs-md-actions button{border:0;border-radius:8px;padding:7px 10px;cursor:pointer;font-weight:600}',
       '#docs-md-scan{background:#164e63;color:#fff}',
       '#docs-md-export{background:#0a7f38;color:#fff}',
       '#docs-md-stop{background:#8c2f39;color:#fff}',
       '#docs-md-status{background:#f7f9fc;border:1px solid #dbe3ef;border-radius:8px;padding:8px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}',
+      '#docs-md-export-progress{border:1px solid #dbe3ef;background:#f9fbff;border-radius:8px;padding:8px;display:none;gap:6px;flex-direction:column}',
+      '#docs-md-export-progress.active{display:flex}',
+      '#docs-md-progress-bar{width:100%;height:8px;background:#e5eaf3;border-radius:999px;overflow:hidden}',
+      '#docs-md-progress-fill{height:100%;width:0;background:#0a7f38;transition:width .2s ease}',
+      '#docs-md-progress-text{font-size:12px;color:#334155}',
+      '#docs-md-usage{font-size:11px;color:#64748b;white-space:pre-wrap}',
       '#docs-md-tree{border:1px solid #dbe3ef;border-radius:8px;padding:8px;max-height:260px;overflow:auto;background:#fbfcff}',
       '.docs-md-item{display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-bottom:1px dashed #eef2f7}',
       '.docs-md-item:last-child{border-bottom:0}',
-      '.docs-md-item-content{display:flex;flex-direction:column;gap:2px;min-width:0}',
+      '.docs-md-item-content{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}',
       '.docs-md-item-title{font-weight:600;word-break:break-word}',
-      '.docs-md-item-url{word-break:break-all;color:#64748b;font-size:12px}',
+      '.docs-md-item-group{font-weight:700;color:#0f172a}',
       '.docs-md-mini{font-size:12px;color:#4b5563}',
       '#docs-md-close{background:transparent;border:0;font-size:18px;line-height:1;cursor:pointer;color:#1f2937}'
     ].join('');
@@ -366,18 +507,18 @@
     panel.innerHTML = [
       '<div id="docs-md-head"><span>Docs Markdown Crawler</span><button id="docs-md-close" type="button">×</button></div>',
       '<div id="docs-md-body">',
-      '  <label class="docs-md-mini">扫描起点（当前页面）</label>',
-      '  <input id="docs-md-root" readonly placeholder="当前页面 URL">',
-      '  <div id="docs-md-row">',
-      '    <div><label class="docs-md-mini">最大页面数</label><input id="docs-md-max-pages" type="number" min="1" max="2000" value="' + DEFAULTS.maxPages + '"></div>',
-      '    <div><label class="docs-md-mini">图片模式</label><select id="docs-md-image-mode"><option value="local" selected>下载本地</option><option value="external">保留外链</option></select></div>',
-      '  </div>',
+      '  <div><label class="docs-md-mini">图片模式</label><select id="docs-md-image-mode"><option value="local" selected>下载本地</option><option value="external">保留外链</option></select></div>',
       '  <div id="docs-md-actions">',
       '    <button id="docs-md-scan" type="button">扫描目录</button>',
       '    <button id="docs-md-export" type="button">导出 ZIP</button>',
       '    <button id="docs-md-stop" type="button">停止</button>',
       '  </div>',
       '  <div id="docs-md-status">等待手动扫描</div>',
+      '  <div id="docs-md-export-progress">',
+      '    <div id="docs-md-progress-bar"><div id="docs-md-progress-fill"></div></div>',
+      '    <div id="docs-md-progress-text">导出进度: 0/0 (0%)</div>',
+      '    <div id="docs-md-usage"></div>',
+      '  </div>',
       '  <label class="docs-md-mini"><input id="docs-md-check-all" type="checkbox" checked> 全选</label>',
       '  <div id="docs-md-tree"></div>',
       '</div>'
@@ -390,17 +531,18 @@
       fab,
       panel,
       closeBtn: panel.querySelector('#docs-md-close'),
-      rootInput: panel.querySelector('#docs-md-root'),
-      maxPagesInput: panel.querySelector('#docs-md-max-pages'),
       imageModeSelect: panel.querySelector('#docs-md-image-mode'),
       scanBtn: panel.querySelector('#docs-md-scan'),
       exportBtn: panel.querySelector('#docs-md-export'),
       stopBtn: panel.querySelector('#docs-md-stop'),
       status: panel.querySelector('#docs-md-status'),
+      exportProgress: panel.querySelector('#docs-md-export-progress'),
+      progressFill: panel.querySelector('#docs-md-progress-fill'),
+      progressText: panel.querySelector('#docs-md-progress-text'),
+      usageText: panel.querySelector('#docs-md-usage'),
       tree: panel.querySelector('#docs-md-tree'),
       checkAll: panel.querySelector('#docs-md-check-all')
     };
-    state.elements.rootInput.value = normalizeUrl(location.href) || location.href;
 
     state.elements.fab.addEventListener('click', () => {
       panel.classList.toggle('open');
@@ -419,9 +561,10 @@
 
     state.elements.checkAll.addEventListener('change', () => {
       const checked = state.elements.checkAll.checked;
-      state.elements.tree.querySelectorAll('input[type="checkbox"][data-url]').forEach((el) => {
+      getPageCheckboxes().forEach((el) => {
         el.checked = checked;
       });
+      syncSelectAllState();
     });
   }
 
@@ -431,13 +574,57 @@
     }
   }
 
+  function getPageCheckboxes() {
+    return Array.from(state.elements.tree.querySelectorAll('input[type="checkbox"][data-url]'));
+  }
+
+  function syncSelectAllState() {
+    const total = getPageCheckboxes().length;
+    const selected = getPageCheckboxes().filter((cb) => cb.checked).length;
+    const status = computeSelectAllState(total, selected);
+    state.elements.checkAll.checked = status.checked;
+    state.elements.checkAll.indeterminate = status.indeterminate;
+  }
+
+  function setExportProgressVisible(visible) {
+    if (!state.elements.exportProgress) {
+      return;
+    }
+    if (visible) {
+      state.elements.exportProgress.classList.add('active');
+    } else {
+      state.elements.exportProgress.classList.remove('active');
+    }
+  }
+
+  function setExportProgress(stageLabel, completed, total) {
+    const progress = computeStageProgress(completed, total);
+    state.elements.progressFill.style.width = progress.percent + '%';
+    state.elements.progressText.textContent = stageLabel + ': ' + progress.completed + '/' + progress.total + ' (' + progress.percent + '%)';
+  }
+
+  function updateUsageText(stats) {
+    state.elements.usageText.textContent = formatUsageStats(stats);
+  }
+
+  function resetExportProgress() {
+    setExportProgressVisible(false);
+    if (state.elements.progressFill) {
+      state.elements.progressFill.style.width = '0%';
+    }
+    if (state.elements.progressText) {
+      state.elements.progressText.textContent = '导出进度: 0/0 (0%)';
+    }
+    if (state.elements.usageText) {
+      state.elements.usageText.textContent = '';
+    }
+  }
+
   function updateProgress(extra) {
     const lines = [
       '发现: ' + state.foundCount,
       '队列: ' + state.queueCount,
-      '成功: ' + state.doneCount,
       '失败: ' + state.failCount,
-      '当前: ' + (state.currentUrl || '-'),
       extra || ''
     ].filter(Boolean);
     setStatus(lines.join('\n'));
@@ -452,33 +639,40 @@
       return;
     }
 
+    const treeItems = buildTreeItems(items, state.scanStartUrl || normalizeUrl(location.href) || location.href);
     const frag = document.createDocumentFragment();
-    for (const item of items) {
-      const row = document.createElement('label');
+    for (const item of treeItems) {
+      const row = document.createElement('div');
       row.className = 'docs-md-item';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = true;
-      cb.dataset.url = item.url;
+      row.style.paddingLeft = (item.depth * 14) + 'px';
 
-      const content = document.createElement('span');
-      content.className = 'docs-md-item-content';
+      if (item.type === 'group') {
+        const group = document.createElement('span');
+        group.className = 'docs-md-item-group';
+        group.textContent = item.title;
+        row.appendChild(group);
+      } else {
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = true;
+        cb.dataset.url = item.url;
+        cb.addEventListener('change', syncSelectAllState);
 
-      const titleSpan = document.createElement('span');
-      titleSpan.className = 'docs-md-item-title';
-      titleSpan.textContent = getDisplayTitle(item.url, item.title || '');
+        const content = document.createElement('span');
+        content.className = 'docs-md-item-content';
 
-      const urlSpan = document.createElement('span');
-      urlSpan.className = 'docs-md-item-url';
-      urlSpan.textContent = item.url;
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'docs-md-item-title';
+        titleSpan.textContent = item.title;
 
-      content.appendChild(titleSpan);
-      content.appendChild(urlSpan);
-      row.appendChild(cb);
-      row.appendChild(content);
+        content.appendChild(titleSpan);
+        row.appendChild(cb);
+        row.appendChild(content);
+      }
       frag.appendChild(row);
     }
     tree.appendChild(frag);
+    syncSelectAllState();
   }
 
   function gmRequest(method, url, opts) {
@@ -581,7 +775,7 @@
     const visited = new Set();
     const found = new Set();
 
-    while (queue.length && found.size < DEFAULTS.maxPages && !state.stopRequested) {
+    while (queue.length && !state.stopRequested) {
       const sitemapUrl = queue.shift();
       if (visited.has(sitemapUrl)) {
         continue;
@@ -638,7 +832,6 @@
   async function discoverUrls(options) {
     const origin = options.origin;
     const startUrl = normalizeUrl(options.startUrl || location.href);
-    const maxPages = options.maxPages;
     const maxDepth = options.maxDepth;
     const excludePatterns = options.excludePatterns || [];
 
@@ -653,7 +846,6 @@
       if (!normalized) return;
       if (!isDocUrl(normalized, origin, startUrl, excludePatterns)) return;
       if (discovered.has(normalized)) return;
-      if (discovered.size >= maxPages) return;
       discovered.add(normalized);
       queue.push(normalized);
       depthMap.set(normalized, depth);
@@ -664,7 +856,7 @@
 
     addUrl(startUrl, 0);
 
-    while (queue.length && discovered.size < maxPages && !state.stopRequested) {
+    while (queue.length && !state.stopRequested) {
       const current = queue.shift();
       state.queueCount = queue.length;
       if (visited.has(current)) {
@@ -680,7 +872,7 @@
       }
 
       state.currentUrl = current;
-      updateProgress('扫描链接中...');
+      updateProgress('扫描中');
 
       let html;
       try {
@@ -703,9 +895,6 @@
       const links = parseLinksFromHtml(html, current);
       for (const link of links) {
         addUrl(link, depth + 1);
-        if (discovered.size >= maxPages) {
-          break;
-        }
       }
 
       await sleep(options.requestDelayMs);
@@ -791,9 +980,8 @@
     }
 
     const startUrl = normalizeUrl(location.href) || location.href;
-    const maxPages = Math.max(1, Math.min(2000, Number(state.elements.maxPagesInput.value) || DEFAULTS.maxPages));
-    state.elements.rootInput.value = startUrl;
-    state.elements.maxPagesInput.value = String(maxPages);
+    state.scanStartUrl = startUrl;
+    resetExportProgress();
 
     state.scanning = true;
     state.stopRequested = false;
@@ -806,13 +994,13 @@
     state.failCount = 0;
     state.queueCount = 0;
     state.currentUrl = '';
+    state.doneCount = 0;
     updateProgress('开始扫描当前页面及其子链接...');
 
     try {
       const urls = await discoverUrls({
         origin: location.origin,
         startUrl,
-        maxPages,
         maxDepth: DEFAULTS.maxDepth,
         excludePatterns: DEFAULT_EXCLUDES,
         requestDelayMs: DEFAULTS.requestDelayMs,
@@ -841,7 +1029,7 @@
     }
   }
 
-  async function downloadImagesToZip(zip, imageJobs) {
+  async function downloadImagesToZip(zip, imageJobs, onProgress, onSuccess) {
     const uniqueJobs = [];
     const seen = new Set();
     for (const job of imageJobs) {
@@ -856,17 +1044,21 @@
         break;
       }
       const job = uniqueJobs[i];
-      state.currentUrl = job.url;
-      updateProgress('下载图片: ' + (i + 1) + '/' + uniqueJobs.length);
       try {
         const binary = await fetchBinaryWithRetry(job.url, DEFAULTS.retries, DEFAULTS.requestDelayMs);
         zip.file(job.path, binary);
+        if (typeof onSuccess === 'function') {
+          onSuccess(binary.byteLength || 0);
+        }
       } catch (err) {
         state.failed.push({
           url: job.url,
           reason: 'image-download-fail:' + (err && err.message ? err.message : 'failed')
         });
         state.failCount = state.failed.length;
+      }
+      if (typeof onProgress === 'function') {
+        onProgress(i + 1, uniqueJobs.length);
       }
       await sleep(120);
     }
@@ -903,31 +1095,56 @@
     state.failCount = state.failed.length;
     state.currentUrl = '';
 
+    const exportStats = {
+      htmlBytes: 0,
+      imageBytes: 0,
+      pageFetched: 0,
+      pageConverted: 0,
+      imagesDownloaded: 0,
+      failedCount: state.failCount,
+      elapsedMs: 0,
+      startMs: Date.now()
+    };
+
+    function refreshUsage() {
+      exportStats.failedCount = state.failCount;
+      exportStats.elapsedMs = Date.now() - exportStats.startMs;
+      updateUsageText(exportStats);
+    }
+
+    function updateExportStage(stageLabel, completed, total) {
+      setExportProgressVisible(true);
+      setExportProgress(stageLabel, completed, total);
+      refreshUsage();
+    }
+
     const zip = new JSZip();
     const turndown = createTurndownService();
     const usedPaths = new Set();
     const pageDrafts = [];
 
     try {
-      updateProgress('读取页面中...');
+      updateExportStage('页面抓取', 0, selected.length);
+      let fetchProcessed = 0;
       for (let i = 0; i < selected.length; i += 1) {
         if (state.stopRequested) {
           break;
         }
 
         const url = selected[i];
-        state.currentUrl = url;
-        updateProgress('抓取页面: ' + (i + 1) + '/' + selected.length);
-
         let html;
         try {
           html = await fetchTextWithRetry(url, DEFAULTS.retries, DEFAULTS.requestDelayMs);
+          exportStats.pageFetched += 1;
+          exportStats.htmlBytes += new TextEncoder().encode(html).length;
         } catch (err) {
           state.failed.push({
             url,
             reason: 'page-fetch-fail:' + (err && err.message ? err.message : 'failed')
           });
           state.failCount = state.failed.length;
+          fetchProcessed += 1;
+          updateExportStage('页面抓取', fetchProcessed, selected.length);
           continue;
         }
 
@@ -942,6 +1159,8 @@
           path
         });
 
+        fetchProcessed += 1;
+        updateExportStage('页面抓取', fetchProcessed, selected.length);
         await sleep(DEFAULTS.requestDelayMs);
       }
 
@@ -957,6 +1176,8 @@
 
       const imageJobs = [];
       const exportedPages = [];
+      let convertProcessed = 0;
+      updateExportStage('Markdown转换', 0, pageDrafts.length);
 
       for (let i = 0; i < pageDrafts.length; i += 1) {
         if (state.stopRequested) {
@@ -964,9 +1185,6 @@
         }
 
         const page = pageDrafts[i];
-        state.currentUrl = page.url;
-        updateProgress('转换 Markdown: ' + (i + 1) + '/' + pageDrafts.length);
-
         const mainNode = extractMainNode(page.doc);
         cleanNodeForMarkdown(mainNode);
 
@@ -989,6 +1207,8 @@
             reason: 'markdown-fail:' + (err && err.message ? err.message : 'failed')
           });
           state.failCount = state.failed.length;
+          convertProcessed += 1;
+          updateExportStage('Markdown转换', convertProcessed, pageDrafts.length);
           continue;
         }
 
@@ -1003,10 +1223,28 @@
         zip.file(page.path, frontMatter + markdown + '\n');
         exportedPages.push(page);
         state.doneCount += 1;
+        exportStats.pageConverted += 1;
+        convertProcessed += 1;
+        updateExportStage('Markdown转换', convertProcessed, pageDrafts.length);
       }
 
-      if (imageMode === 'local' && imageJobs.length) {
-        await downloadImagesToZip(zip, imageJobs);
+      if (imageMode === 'local') {
+        updateExportStage('图片下载', 0, imageJobs.length);
+        if (imageJobs.length) {
+          await downloadImagesToZip(
+            zip,
+            imageJobs,
+            (completed, total) => {
+              exportStats.imagesDownloaded = completed;
+              updateExportStage('图片下载', completed, total);
+            },
+            (bytes) => {
+              exportStats.imageBytes += bytes;
+            }
+          );
+        }
+      } else {
+        updateExportStage('图片下载', 0, 0);
       }
 
       zip.file('SUMMARY.md', buildSummary(exportedPages));
@@ -1018,8 +1256,9 @@
         zip.file('failed-urls.txt', failText + '\n');
       }
 
-      updateProgress('打包 ZIP 中...');
+      updateExportStage('ZIP打包', 0, 1);
       const blob = await zip.generateAsync({ type: 'blob' });
+      updateExportStage('ZIP打包', 1, 1);
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const filename = 'docs-md-export-' + stamp + '.zip';
 

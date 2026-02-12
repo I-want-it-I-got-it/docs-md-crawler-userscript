@@ -66,3 +66,62 @@ test('getDisplayTitle prefers page title and falls back to url segment', () => {
     'start'
   );
 });
+
+test('buildTreeItems creates grouped hierarchical entries', () => {
+  const pages = [
+    { url: 'https://example.com/docs/start', title: 'Start' },
+    { url: 'https://example.com/docs/start/a', title: 'A' },
+    { url: 'https://example.com/docs/start/a/one', title: 'One' },
+    { url: 'https://example.com/docs/start/b/two', title: 'Two' }
+  ];
+  const entries = crawler.buildTreeItems(pages, 'https://example.com/docs/start');
+  assert.deepEqual(
+    entries.map((item) => ({
+      type: item.type,
+      title: item.title,
+      depth: item.depth
+    })),
+    [
+      { type: 'page', title: 'Start', depth: 0 },
+      { type: 'page', title: 'A', depth: 0 },
+      { type: 'group', title: 'a', depth: 0 },
+      { type: 'page', title: 'One', depth: 1 },
+      { type: 'group', title: 'b', depth: 0 },
+      { type: 'page', title: 'Two', depth: 1 }
+    ]
+  );
+});
+
+test('computeSelectAllState returns checked and indeterminate correctly', () => {
+  assert.deepEqual(crawler.computeSelectAllState(0, 0), { checked: false, indeterminate: false });
+  assert.deepEqual(crawler.computeSelectAllState(5, 0), { checked: false, indeterminate: false });
+  assert.deepEqual(crawler.computeSelectAllState(5, 2), { checked: false, indeterminate: true });
+  assert.deepEqual(crawler.computeSelectAllState(5, 5), { checked: true, indeterminate: false });
+});
+
+test('computeStageProgress calculates bounded stage percentage', () => {
+  assert.deepEqual(crawler.computeStageProgress(0, 10), { completed: 0, total: 10, percent: 0 });
+  assert.deepEqual(crawler.computeStageProgress(5, 10), { completed: 5, total: 10, percent: 50 });
+  assert.deepEqual(crawler.computeStageProgress(12, 10), { completed: 10, total: 10, percent: 100 });
+  assert.deepEqual(crawler.computeStageProgress(0, 0), { completed: 0, total: 0, percent: 100 });
+});
+
+test('formatUsageStats renders export usage counters', () => {
+  const text = crawler.formatUsageStats({
+    htmlBytes: 2048,
+    imageBytes: 1048576,
+    pageFetched: 3,
+    pageConverted: 2,
+    imagesDownloaded: 8,
+    failedCount: 1,
+    elapsedMs: 6543
+  });
+  assert.match(text, /HTML 2\.00 KB/);
+  assert.match(text, /图片 1\.00 MB/);
+  assert.match(text, /总计 1\.00 MB/);
+  assert.match(text, /页面抓取 3/);
+  assert.match(text, /页面转换 2/);
+  assert.match(text, /图片下载 8/);
+  assert.match(text, /失败 1/);
+  assert.match(text, /耗时 6\.5s/);
+});
