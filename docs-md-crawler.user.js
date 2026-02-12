@@ -668,9 +668,9 @@
       '.docs-md-toggle-caret{display:inline-flex;align-items:center;justify-content:center;width:14px;min-width:14px;color:hsl(var(--muted-foreground));font-size:12px}',
       '.docs-md-square-check{appearance:none;-webkit-appearance:none;margin-top:2px;width:20px;height:20px;border-radius:6px;border:1.5px solid hsl(var(--border));background:hsl(var(--background));display:inline-grid;place-items:center;cursor:pointer;transition:border-color .16s ease,box-shadow .16s ease,background .16s ease;flex-shrink:0}',
       '.docs-md-square-check::before{content:"";width:10px;height:6px;border-left:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(-45deg) scale(0);transform-origin:center;transition:transform .16s ease}',
-      '.docs-md-square-check:checked{border-color:hsl(228 78% 59%);background:hsl(228 78% 59%);box-shadow:0 4px 10px -6px hsla(228,78%,59%,.75)}',
+      '.docs-md-square-check:checked{border-color:hsl(0 0% 0%);background:hsl(0 0% 0%);box-shadow:0 4px 10px -6px rgba(0,0,0,.55)}',
       '.docs-md-square-check:checked::before{transform:rotate(-45deg) scale(1)}',
-      '.docs-md-square-check:indeterminate{border-color:hsl(228 78% 59%);background:hsl(228 78% 59%);box-shadow:0 4px 10px -6px hsla(228,78%,59%,.75)}',
+      '.docs-md-square-check:indeterminate{border-color:hsl(0 0% 0%);background:hsl(0 0% 0%);box-shadow:0 4px 10px -6px rgba(0,0,0,.55)}',
       '.docs-md-square-check:indeterminate::before{width:10px;height:2px;border:0;border-radius:999px;background:#fff;transform:scale(1)}',
       '.docs-md-square-check:disabled{opacity:.55;cursor:not-allowed;box-shadow:none}',
       '.docs-md-square-check:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:1px}',
@@ -720,7 +720,7 @@
       '    <div id="docs-md-progress-text">导出进度: 0/0 (0%)</div>',
       '    <div id="docs-md-usage"></div>',
       '  </div>',
-      '  <label id="docs-md-check-all-wrap" class="docs-md-check-row docs-md-hidden"><input id="docs-md-check-all" type="checkbox" checked>全选</label>',
+      '  <label id="docs-md-check-all-wrap" class="docs-md-check-row docs-md-hidden"><input id="docs-md-check-all" type="checkbox" class="docs-md-square-check docs-md-group-check" checked>全选</label>',
       '  <div id="docs-md-tree" class="docs-md-surface docs-md-hidden"></div>',
       '</div>'
     ].join('');

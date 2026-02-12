@@ -218,6 +218,8 @@ test('buildUiStyles provides shadcn-style tokens and button variants', () => {
   assert.match(css, /\.docs-md-square-check\{/);
   assert.match(css, /\.docs-md-square-check:checked::before/);
   assert.match(css, /\.docs-md-square-check:indeterminate::before/);
+  assert.match(css, /\.docs-md-square-check:checked\{border-color:hsl\(0 0% 0%\);background:hsl\(0 0% 0%\)/);
+  assert.match(css, /\.docs-md-square-check:indeterminate\{border-color:hsl\(0 0% 0%\);background:hsl\(0 0% 0%\)/);
   assert.match(css, /\.docs-md-group-separator\{/);
   assert.match(css, /\.docs-md-inline-field\{/);
 });
@@ -240,6 +242,7 @@ test('buildPanelMarkup keeps required ids and shadcn-style structure', () => {
   assert.match(html, /docs-md-surface/);
   assert.match(html, /id="docs-md-check-all-wrap"/);
   assert.match(html, /docs-md-check-row docs-md-hidden/);
+  assert.match(html, /id="docs-md-check-all" type="checkbox" class="docs-md-square-check docs-md-group-check" checked/);
   assert.match(html, /id="docs-md-tree" class="docs-md-surface docs-md-hidden"/);
 });
 
