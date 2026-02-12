@@ -294,31 +294,6 @@
     return { checked: false, indeterminate: true };
   }
 
-  function collectGroupDescendantUrls(entries, groupKey) {
-    return (entries || [])
-      .filter((item) => item.type === 'page' && (item.ancestors || []).includes(groupKey))
-      .map((item) => item.url);
-  }
-
-  function computeGroupSelectionState(entries, groupKey, selectedUrls) {
-    const descendants = collectGroupDescendantUrls(entries, groupKey);
-    const selectedSet = selectedUrls instanceof Set ? selectedUrls : new Set(selectedUrls || []);
-    let selected = 0;
-    descendants.forEach((url) => {
-      if (selectedSet.has(url)) {
-        selected += 1;
-      }
-    });
-    const base = computeSelectAllState(descendants.length, selected);
-    return {
-      checked: base.checked,
-      indeterminate: base.indeterminate,
-      total: descendants.length,
-      selected,
-      descendants
-    };
-  }
-
   function computeStageProgress(completed, total) {
     if (!total || total <= 0) {
       return { completed: 0, total: 0, percent: 100 };
@@ -352,74 +327,20 @@
     return (Math.max(0, Number(ms) || 0) / 1000).toFixed(1) + 's';
   }
 
-  function escapeHtml(value) {
-    return String(value || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  function formatFailureReason(reason) {
-    const raw = String(reason || '').trim();
-    if (!raw) {
-      return 'unknown';
-    }
-    const mappings = [
-      ['discover:', '扫描失败: '],
-      ['page-fetch-fail:', '页面抓取失败: '],
-      ['markdown-fail:', 'Markdown 转换失败: '],
-      ['image-download-fail:', '图片下载失败: '],
-      ['retry-fail:', '重试失败: ']
-    ];
-    for (const pair of mappings) {
-      if (raw.startsWith(pair[0])) {
-        return pair[1] + (raw.slice(pair[0].length) || 'unknown');
-      }
-    }
-    return raw;
-  }
-
   function formatUsageStats(stats) {
+    const htmlBytes = Number(stats.htmlBytes) || 0;
+    const imageBytes = Number(stats.imageBytes) || 0;
+    const totalBytes = htmlBytes + imageBytes;
     const pageFetched = Number(stats.pageFetched) || 0;
     const pageConverted = Number(stats.pageConverted) || 0;
     const imagesDownloaded = Number(stats.imagesDownloaded) || 0;
     const failedCount = Number(stats.failedCount) || 0;
     const elapsedMs = Number(stats.elapsedMs) || 0;
 
-    return '任务: 页面抓取 ' + pageFetched + ' | 页面转换 ' + pageConverted + ' | 图片下载 ' + imagesDownloaded + ' | 失败 ' + failedCount + ' | 耗时 ' + formatDuration(elapsedMs);
-  }
-
-  function buildUsageStatsMarkup(stats) {
-    const pageFetched = Number(stats.pageFetched) || 0;
-    const pageConverted = Number(stats.pageConverted) || 0;
-    const imagesDownloaded = Number(stats.imagesDownloaded) || 0;
-    const failedCount = Math.max(0, Number(stats.failedCount) || 0);
-    const elapsedMs = Number(stats.elapsedMs) || 0;
-
-    const prefix = '任务: 页面抓取 ' + pageFetched + ' | 页面转换 ' + pageConverted + ' | 图片下载 ' + imagesDownloaded + ' | ';
-    const suffix = ' | 耗时 ' + formatDuration(elapsedMs);
-    if (failedCount > 0) {
-      return escapeHtml(prefix) + '<button type="button" class="docs-md-fail-link">失败 ' + failedCount + '</button>' + escapeHtml(suffix);
-    }
-    return escapeHtml(prefix + '失败 0' + suffix);
-  }
-
-  function computeStopControlState(flags) {
-    const running = Boolean(flags && (flags.scanning || flags.exporting));
-    const paused = Boolean(flags && flags.paused);
-    const pauseRequested = Boolean(flags && flags.pauseRequested);
-    if (!running) {
-      return { label: '停止', disabled: true, mode: 'idle' };
-    }
-    if (paused) {
-      return { label: '继续', disabled: false, mode: 'resume' };
-    }
-    if (pauseRequested) {
-      return { label: '停止中...', disabled: true, mode: 'stopping' };
-    }
-    return { label: '停止', disabled: false, mode: 'stop' };
+    return [
+      '占用: HTML ' + formatBytes(htmlBytes) + ' | 图片 ' + formatBytes(imageBytes) + ' | 总计 ' + formatBytes(totalBytes),
+      '任务: 页面抓取 ' + pageFetched + ' | 页面转换 ' + pageConverted + ' | 图片下载 ' + imagesDownloaded + ' | 失败 ' + failedCount + ' | 耗时 ' + formatDuration(elapsedMs)
+    ].join('\n');
   }
 
   function buildFailedQueueItems(failedItems) {
@@ -427,7 +348,6 @@
       id: item.id,
       url: item.url,
       reason: item.reason,
-      reasonText: formatFailureReason(item.reason),
       title: getDisplayTitle(item.url, item.title || '')
     }));
   }
@@ -547,14 +467,8 @@
       '#docs-md-body{padding:12px;display:flex;flex-direction:column;gap:10px;overflow:auto}',
       '.docs-md-field{display:flex;flex-direction:column;gap:6px}',
       '.docs-md-label{font-size:12px;color:hsl(var(--muted-foreground));font-weight:600}',
-      '.docs-md-switch{display:inline-flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid hsl(var(--input));border-radius:var(--radius);background:hsl(var(--background));min-height:38px;cursor:pointer;user-select:none}',
-      '.docs-md-switch-option{font-size:12px;font-weight:600;color:hsl(var(--muted-foreground));line-height:1}',
-      '#docs-md-image-mode{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}',
-      '.docs-md-switch-track{position:relative;width:36px;height:20px;border-radius:999px;background:hsl(var(--secondary));border:1px solid hsl(var(--border));display:inline-flex;align-items:center;padding:1px;transition:background .2s ease,border-color .2s ease}',
-      '.docs-md-switch-thumb{width:16px;height:16px;border-radius:999px;background:hsl(var(--background));box-shadow:0 2px 4px rgba(15,23,42,.2);transform:translateX(0);transition:transform .2s ease,background .2s ease}',
-      '#docs-md-image-mode:checked + .docs-md-switch-track{background:hsl(var(--primary));border-color:hsl(var(--primary))}',
-      '#docs-md-image-mode:checked + .docs-md-switch-track .docs-md-switch-thumb{transform:translateX(16px);background:hsl(var(--primary-foreground))}',
-      '#docs-md-image-mode:focus-visible + .docs-md-switch-track{outline:2px solid hsl(var(--ring));outline-offset:2px}',
+      '#docs-md-image-mode{width:100%;min-height:36px;padding:8px 10px;border:1px solid hsl(var(--input));border-radius:var(--radius);background:hsl(var(--background));color:hsl(var(--foreground));font:500 13px/1.25 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;transition:border-color .2s ease,box-shadow .2s ease}',
+      '#docs-md-image-mode:focus-visible{outline:none;border-color:hsl(var(--ring));box-shadow:0 0 0 2px hsla(var(--ring),.25)}',
       '#docs-md-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}',
       '.docs-md-btn{min-height:34px;padding:0 10px;border-radius:10px;border:1px solid transparent;font-size:12px;font-weight:700;letter-spacing:.01em;cursor:pointer;transition:background .18s ease,color .18s ease,border-color .18s ease,transform .18s ease}',
       '.docs-md-btn:hover{transform:translateY(-1px)}',
@@ -592,31 +506,23 @@
       '#docs-md-progress-bar{width:100%;height:8px;background:hsl(var(--secondary));border-radius:999px;overflow:hidden}',
       '#docs-md-progress-fill{height:100%;width:0;background:linear-gradient(90deg,hsl(var(--primary)) 0%,hsl(var(--primary) / .72) 100%);transition:width .22s ease}',
       '#docs-md-progress-text{font-size:12px;color:hsl(var(--foreground))}',
-      '#docs-md-usage{font-size:11px;color:hsl(var(--muted-foreground));line-height:1.5;word-break:break-word}',
-      '.docs-md-fail-link{appearance:none;border:0;background:transparent;padding:0;font:inherit;color:hsl(var(--destructive));text-decoration-line:underline;text-decoration-style:dashed;text-decoration-thickness:1px;text-underline-offset:2px;cursor:pointer}',
-      '.docs-md-fail-link:hover{color:hsl(var(--destructive) / .86)}',
-      '.docs-md-fail-link:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px;border-radius:3px}',
+      '#docs-md-usage{font-size:11px;color:hsl(var(--muted-foreground));white-space:pre-wrap;line-height:1.5}',
       '#docs-md-failed-wrap{display:none;padding:8px 10px}',
       '#docs-md-failed-wrap.open{display:block}',
       '#docs-md-tree{max-height:260px;overflow:auto;padding:6px 10px}',
       '.docs-md-item{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px dashed hsl(var(--border))}',
       '.docs-md-item:last-child{border-bottom:0}',
-      '.docs-md-group-row{padding:8px 0;align-items:center;justify-content:space-between;gap:10px}',
-      '.docs-md-group-separator{border-top:1px solid hsl(var(--border));margin-top:6px;padding-top:10px}',
-      '.docs-md-tree-toggle{display:flex;align-items:center;gap:8px;border:0;background:transparent;padding:0;cursor:pointer;color:inherit;font:inherit;min-width:0;flex:1}',
+      '.docs-md-group-row{padding:8px 0}',
+      '.docs-md-tree-toggle{display:flex;align-items:center;gap:8px;border:0;background:transparent;padding:0;cursor:pointer;color:inherit;font:inherit}',
       '.docs-md-toggle-caret{display:inline-flex;align-items:center;justify-content:center;width:14px;min-width:14px;color:hsl(var(--muted-foreground));font-size:12px}',
-      '.docs-md-square-check{appearance:none;-webkit-appearance:none;margin-top:2px;width:16px;height:16px;border-radius:5px;border:1.6px solid hsl(var(--border));background:hsl(var(--background));display:inline-grid;place-items:center;cursor:pointer;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease;flex-shrink:0}',
-      '.docs-md-square-check::before{content:"";width:8px;height:8px;border-radius:2px;background:hsl(var(--primary));transform:scale(0);transition:transform .12s ease}',
-      '.docs-md-square-check:checked{border-color:hsl(var(--primary));background:hsl(var(--primary) / .08);box-shadow:0 0 0 2px hsla(var(--primary),.18)}',
-      '.docs-md-square-check:checked::before{transform:scale(1)}',
-      '.docs-md-square-check:indeterminate{border-color:hsl(var(--primary));background:hsl(var(--primary) / .08);box-shadow:0 0 0 2px hsla(var(--primary),.18)}',
-      '.docs-md-square-check:indeterminate::before{width:8px;height:2px;border-radius:1px;transform:scale(1)}',
-      '.docs-md-square-check:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:1px}',
-      '.docs-md-group-check{margin-top:0}',
+      '.docs-md-circle-check{appearance:none;-webkit-appearance:none;margin-top:2px;width:16px;height:16px;border-radius:999px;border:1.6px solid hsl(var(--border));background:hsl(var(--background));display:inline-grid;place-items:center;cursor:pointer;transition:border-color .15s ease,box-shadow .15s ease;flex-shrink:0}',
+      '.docs-md-circle-check::before{content:"";width:8px;height:8px;border-radius:999px;background:hsl(var(--primary));transform:scale(0);transition:transform .12s ease}',
+      '.docs-md-circle-check:checked{border-color:hsl(var(--primary));box-shadow:0 0 0 2px hsla(var(--primary),.18)}',
+      '.docs-md-circle-check:checked::before{transform:scale(1)}',
+      '.docs-md-circle-check:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:1px}',
       '.docs-md-item-content{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}',
       '.docs-md-item-title{font-weight:600;word-break:break-word;color:hsl(var(--foreground))}',
-      '.docs-md-item-reason{font-size:11px;color:hsl(var(--muted-foreground));word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}',
-      '.docs-md-item-group{display:inline-flex;align-items:center;font-size:12px;font-weight:600;color:hsl(var(--foreground))}',
+      '.docs-md-item-group{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;background:hsl(var(--secondary));border:1px solid hsl(var(--border));font-size:11px;font-weight:700;color:hsl(var(--secondary-foreground))}',
       '.docs-md-retry{min-height:28px;padding:0 10px}',
       '.docs-md-hidden{display:none !important}',
       '.docs-md-check-row{display:flex;align-items:center;gap:7px;font-size:12px;color:hsl(var(--muted-foreground));padding:0 2px}',
@@ -636,12 +542,10 @@
       '<div id="docs-md-body">',
       '  <div class="docs-md-field">',
       '    <label class="docs-md-label" for="docs-md-image-mode">图片模式</label>',
-      '    <label class="docs-md-switch" for="docs-md-image-mode">',
-      '      <span class="docs-md-switch-option">外链</span>',
-      '      <input id="docs-md-image-mode" type="checkbox" role="switch" checked>',
-      '      <span class="docs-md-switch-track" aria-hidden="true"><span class="docs-md-switch-thumb"></span></span>',
-      '      <span class="docs-md-switch-option">本地</span>',
-      '    </label>',
+      '    <select id="docs-md-image-mode">',
+      '      <option value="local" selected>下载本地</option>',
+      '      <option value="external">保留外链</option>',
+      '    </select>',
       '  </div>',
       '  <div id="docs-md-actions">',
       '    <button id="docs-md-scan" type="button" class="docs-md-btn docs-md-btn-primary docs-md-btn-scan">扫描目录</button>',
@@ -673,13 +577,9 @@
       buildTreeItems,
       buildFailedQueueItems,
       computeSelectAllState,
-      computeGroupSelectionState,
       computeStageProgress,
       computeZipPackProgress,
       formatUsageStats,
-      buildUsageStatsMarkup,
-      computeStopControlState,
-      formatFailureReason,
       normalizeRootPath,
       sanitizeSegment,
       relativePath,
@@ -691,9 +591,7 @@
   const state = {
     scanning: false,
     exporting: false,
-    pauseRequested: false,
-    paused: false,
-    pauseResolvers: [],
+    stopRequested: false,
     discoveredUrls: [],
     selectedUrls: new Set(),
     collapsedGroups: new Set(),
@@ -738,7 +636,7 @@
       fab,
       panel,
       closeBtn: panel.querySelector('#docs-md-close'),
-      imageModeSwitch: panel.querySelector('#docs-md-image-mode'),
+      imageModeSelect: panel.querySelector('#docs-md-image-mode'),
       scanBtn: panel.querySelector('#docs-md-scan'),
       exportBtn: panel.querySelector('#docs-md-export'),
       stopBtn: panel.querySelector('#docs-md-stop'),
@@ -768,11 +666,8 @@
     state.elements.scanBtn.addEventListener('click', runScan);
     state.elements.exportBtn.addEventListener('click', runExport);
     state.elements.stopBtn.addEventListener('click', () => {
-      if (state.paused) {
-        resumeCurrentTask();
-      } else {
-        requestPauseCurrentTask();
-      }
+      state.stopRequested = true;
+      setStatus('已请求停止，等待当前任务收尾...');
     });
 
     state.elements.checkAll.addEventListener('change', () => {
@@ -796,24 +691,11 @@
       }
     });
 
-    state.elements.usageText.addEventListener('click', (event) => {
-      const target = event.target;
-      if (!target || !target.classList || !target.classList.contains('docs-md-fail-link')) {
-        return;
-      }
-      if (state.failCount <= 0) {
-        return;
-      }
-      setFailedWrapVisible(true);
-      renderFailedQueue();
-    });
-
     updateFailToggle();
     renderFailedQueue();
     setSelectAllVisible(false);
     setTreeVisible(false);
     setExportButtonBusy(false);
-    setStopButtonState();
   }
 
   function setStatus(text) {
@@ -872,11 +754,6 @@
       titleSpan.className = 'docs-md-item-title';
       titleSpan.textContent = item.title;
       content.appendChild(titleSpan);
-
-      const reasonSpan = document.createElement('span');
-      reasonSpan.className = 'docs-md-item-reason';
-      reasonSpan.textContent = item.reasonText;
-      content.appendChild(reasonSpan);
 
       const retryBtn = document.createElement('button');
       retryBtn.type = 'button';
@@ -1069,85 +946,6 @@
     }
   }
 
-  function flushPauseResolvers() {
-    if (!state.pauseResolvers.length) {
-      return;
-    }
-    const waiters = state.pauseResolvers.splice(0, state.pauseResolvers.length);
-    waiters.forEach((resolve) => {
-      try {
-        resolve();
-      } catch (_) {
-        // ignore resolver failures
-      }
-    });
-  }
-
-  function setStopButtonState() {
-    if (!state.elements.stopBtn) {
-      return;
-    }
-    const control = computeStopControlState({
-      scanning: state.scanning,
-      exporting: state.exporting,
-      pauseRequested: state.pauseRequested,
-      paused: state.paused
-    });
-    state.elements.stopBtn.textContent = control.label;
-    state.elements.stopBtn.disabled = control.disabled;
-    state.elements.stopBtn.classList.toggle('docs-md-btn-secondary', control.mode === 'resume');
-    state.elements.stopBtn.classList.toggle('docs-md-btn-destructive', control.mode !== 'resume');
-  }
-
-  function resetPauseState() {
-    state.pauseRequested = false;
-    state.paused = false;
-    flushPauseResolvers();
-    setStopButtonState();
-  }
-
-  function requestPauseCurrentTask() {
-    if (!(state.scanning || state.exporting)) {
-      setStopButtonState();
-      return;
-    }
-    if (state.pauseRequested || state.paused) {
-      return;
-    }
-    state.pauseRequested = true;
-    setStopButtonState();
-    setStatus('已请求停止，等待当前任务暂停...');
-  }
-
-  function resumeCurrentTask() {
-    if (!state.paused) {
-      return;
-    }
-    state.pauseRequested = false;
-    state.paused = false;
-    flushPauseResolvers();
-    setStopButtonState();
-    setStatus('继续当前任务...');
-  }
-
-  async function waitIfPaused() {
-    if (!state.pauseRequested && !state.paused) {
-      return;
-    }
-    if (state.pauseRequested) {
-      state.pauseRequested = false;
-      state.paused = true;
-      setStopButtonState();
-      setStatus('任务已停止，点击“继续”恢复');
-    }
-    if (!state.paused) {
-      return;
-    }
-    await new Promise((resolve) => {
-      state.pauseResolvers.push(resolve);
-    });
-  }
-
   function computeOverallExportPercent(stageLabel, completed, total) {
     const stagePercent = computeStageProgress(completed, total).percent;
     const stageIndex = EXPORT_STAGE_SEQUENCE.indexOf(stageLabel);
@@ -1158,7 +956,7 @@
   }
 
   function updateUsageText(stats) {
-    state.elements.usageText.innerHTML = buildUsageStatsMarkup(stats);
+    state.elements.usageText.textContent = formatUsageStats(stats);
   }
 
   function resetExportProgress() {
@@ -1196,7 +994,6 @@
 
     const treeItems = buildTreeItems(items, state.scanStartUrl || normalizeUrl(location.href) || location.href);
     const frag = document.createDocumentFragment();
-    const separatedGroups = new Set();
     for (const item of treeItems) {
       if ((item.ancestors || []).some((key) => state.collapsedGroups.has(key))) {
         continue;
@@ -1204,19 +1001,10 @@
       const row = document.createElement('div');
       row.className = 'docs-md-item';
       row.style.paddingLeft = (item.depth * 14) + 'px';
-      if (item.ancestors && item.ancestors.length) {
-        const directParentGroup = item.ancestors[item.ancestors.length - 1];
-        if (!separatedGroups.has(directParentGroup)) {
-          row.classList.add('docs-md-group-separator');
-          separatedGroups.add(directParentGroup);
-        }
-      }
 
       if (item.type === 'group') {
         row.classList.add('docs-md-group-row');
         const expanded = !state.collapsedGroups.has(item.key);
-        const groupState = computeGroupSelectionState(treeItems, item.key, state.selectedUrls);
-
         const toggle = document.createElement('button');
         toggle.type = 'button';
         toggle.className = 'docs-md-tree-toggle';
@@ -1241,30 +1029,11 @@
           renderTree(state.discoveredUrls);
         });
 
-        const groupCheck = document.createElement('input');
-        groupCheck.type = 'checkbox';
-        groupCheck.className = 'docs-md-square-check docs-md-group-check';
-        groupCheck.checked = groupState.checked;
-        groupCheck.indeterminate = groupState.indeterminate;
-        groupCheck.disabled = groupState.total <= 0;
-        groupCheck.addEventListener('change', () => {
-          groupState.descendants.forEach((url) => {
-            if (groupCheck.checked) {
-              state.selectedUrls.add(url);
-            } else {
-              state.selectedUrls.delete(url);
-            }
-          });
-          renderTree(state.discoveredUrls);
-          syncSelectAllState();
-        });
-
         row.appendChild(toggle);
-        row.appendChild(groupCheck);
       } else {
         const cb = document.createElement('input');
         cb.type = 'checkbox';
-        cb.className = 'docs-md-square-check';
+        cb.className = 'docs-md-circle-check';
         cb.checked = state.selectedUrls.has(item.url);
         cb.dataset.url = item.url;
         cb.addEventListener('change', () => {
@@ -1273,7 +1042,6 @@
           } else {
             state.selectedUrls.delete(item.url);
           }
-          renderTree(state.discoveredUrls);
           syncSelectAllState();
         });
 
@@ -1394,8 +1162,7 @@
     const visited = new Set();
     const found = new Set();
 
-    while (queue.length) {
-      await waitIfPaused();
+    while (queue.length && !state.stopRequested) {
       const sitemapUrl = queue.shift();
       if (visited.has(sitemapUrl)) {
         continue;
@@ -1476,8 +1243,7 @@
 
     addUrl(startUrl, 0);
 
-    while (queue.length) {
-      await waitIfPaused();
+    while (queue.length && !state.stopRequested) {
       const current = queue.shift();
       state.queueCount = queue.length;
       if (visited.has(current)) {
@@ -1603,9 +1369,8 @@
     resetExportProgress();
 
     state.scanning = true;
-    resetPauseState();
+    state.stopRequested = false;
     setScanButtonBusy(true);
-    setStopButtonState();
     setSelectAllVisible(false);
     setTreeVisible(false);
     state.selectedUrls = new Set();
@@ -1647,14 +1412,19 @@
       renderTree(urls);
       state.queueCount = 0;
       state.currentUrl = '';
-      updateProgress('扫描完成，可勾选后导出');
+
+      if (state.stopRequested) {
+        updateProgress('扫描已停止');
+      } else {
+        updateProgress('扫描完成，可勾选后导出');
+      }
     } catch (err) {
       renderTree(state.discoveredUrls);
       setStatus('扫描失败: ' + (err && err.message ? err.message : 'unknown'));
     } finally {
       state.scanning = false;
+      state.stopRequested = false;
       setScanButtonBusy(false);
-      resetPauseState();
     }
   }
 
@@ -1669,7 +1439,9 @@
     }
 
     for (let i = 0; i < uniqueJobs.length; i += 1) {
-      await waitIfPaused();
+      if (state.stopRequested) {
+        break;
+      }
       const job = uniqueJobs[i];
       try {
         const binary = await fetchBinaryWithRetry(job.url, DEFAULTS.retries, DEFAULTS.requestDelayMs);
@@ -1704,9 +1476,7 @@
     }
 
     const exportRootPath = '/';
-    const imageMode = state.elements.imageModeSwitch
-      ? (state.elements.imageModeSwitch.checked ? 'local' : 'external')
-      : DEFAULTS.imageMode;
+    const imageMode = state.elements.imageModeSelect.value || DEFAULTS.imageMode;
     const selected = selectedUrlsFromTree();
 
     if (!selected.length) {
@@ -1715,9 +1485,8 @@
     }
 
     state.exporting = true;
-    resetPauseState();
+    state.stopRequested = false;
     setExportButtonBusy(true);
-    setStopButtonState();
     state.doneCount = 0;
     state.failCount = state.failed.length;
     updateFailToggle();
@@ -1760,7 +1529,9 @@
       updateExportStage('页面抓取', 0, selected.length);
       let fetchProcessed = 0;
       for (let i = 0; i < selected.length; i += 1) {
-        await waitIfPaused();
+        if (state.stopRequested) {
+          break;
+        }
 
         const url = selected[i];
         let html;
@@ -1808,7 +1579,9 @@
       updateExportStage('Markdown转换', 0, pageDrafts.length);
 
       for (let i = 0; i < pageDrafts.length; i += 1) {
-        await waitIfPaused();
+        if (state.stopRequested) {
+          break;
+        }
 
         const page = pageDrafts[i];
         const mainNode = extractMainNode(page.doc);
@@ -1895,14 +1668,19 @@
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(objUrl), 8000);
-      updateProgress('导出完成: ' + state.doneCount + ' 页');
+
+      if (state.stopRequested) {
+        updateProgress('已停止，已导出当前完成内容');
+      } else {
+        updateProgress('导出完成: ' + state.doneCount + ' 页');
+      }
     } catch (err) {
       setStatus('导出失败: ' + (err && err.message ? err.message : 'unknown'));
     } finally {
       state.currentUrl = '';
       state.exporting = false;
+      state.stopRequested = false;
       setExportButtonBusy(false);
-      resetPauseState();
     }
   }
 

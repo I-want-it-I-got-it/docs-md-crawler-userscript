@@ -151,9 +151,9 @@ test('formatUsageStats renders export usage counters', () => {
     failedCount: 1,
     elapsedMs: 6543
   });
-  assert.match(text, /HTML 2\.00 KB/);
-  assert.match(text, /图片 1\.00 MB/);
-  assert.match(text, /总计 1\.00 MB/);
+  assert.doesNotMatch(text, /占用:/);
+  assert.doesNotMatch(text, /HTML 2\.00 KB/);
+  assert.doesNotMatch(text, /图片 1\.00 MB/);
   assert.match(text, /页面抓取 3/);
   assert.match(text, /页面转换 2/);
   assert.match(text, /图片下载 8/);
@@ -188,12 +188,19 @@ test('buildUiStyles provides shadcn-style tokens and button variants', () => {
   assert.match(css, /\.docs-md-btn-primary\{/);
   assert.match(css, /\.docs-md-btn-outline\{/);
   assert.match(css, /\.docs-md-surface\{/);
+  assert.match(css, /\.docs-md-switch\{/);
+  assert.match(css, /\.docs-md-fail-link\{/);
+  assert.match(css, /text-decoration-style:dashed/);
+  assert.match(css, /\.docs-md-square-check\{/);
+  assert.match(css, /\.docs-md-group-separator\{/);
 });
 
 test('buildPanelMarkup keeps required ids and shadcn-style structure', () => {
   const html = crawler.buildPanelMarkup();
   assert.match(html, /id="docs-md-head"/);
   assert.match(html, /id="docs-md-image-mode"/);
+  assert.match(html, /id="docs-md-image-mode" type="checkbox"/);
+  assert.doesNotMatch(html, /<select id="docs-md-image-mode"/);
   assert.match(html, /id="docs-md-scan"/);
   assert.match(html, /id="docs-md-export"/);
   assert.match(html, /id="docs-md-stop"/);
@@ -205,6 +212,7 @@ test('buildPanelMarkup keeps required ids and shadcn-style structure', () => {
   assert.match(html, /docs-md-surface/);
   assert.match(html, /id="docs-md-check-all-wrap"/);
   assert.match(html, /docs-md-check-row docs-md-hidden/);
+  assert.match(html, /id="docs-md-tree" class="docs-md-surface docs-md-hidden"/);
 });
 
 test('buildPanelMarkup removes shadcn-inspired subtitle text', () => {
@@ -226,7 +234,116 @@ test('buildUiStyles includes export button water-wave and edge percent hooks', (
   assert.match(css, /\.docs-md-btn-export\.is-exporting::after/);
   assert.match(css, /\.docs-md-btn-export\.is-exporting \.docs-md-btn-label/);
   assert.match(css, /\.docs-md-tree-toggle/);
-  assert.match(css, /\.docs-md-circle-check/);
+  assert.match(css, /\.docs-md-square-check/);
   assert.match(css, /@keyframes docs-md-export-wave/);
   assert.match(css, /\.docs-md-hidden\{display:none/);
+});
+
+test('buildUsageStatsMarkup wraps failed count with clickable dashed underline', () => {
+  const html = crawler.buildUsageStatsMarkup({
+    pageFetched: 12,
+    pageConverted: 11,
+    imagesDownloaded: 8,
+    failedCount: 4,
+    elapsedMs: 2480
+  });
+  assert.match(html, /class="docs-md-fail-link"/);
+  assert.match(html, /失败 4/);
+  assert.match(html, /页面抓取 12/);
+  assert.match(html, /页面转换 11/);
+});
+
+test('buildUsageStatsMarkup keeps plain text when there are no failures', () => {
+  const html = crawler.buildUsageStatsMarkup({
+    pageFetched: 2,
+    pageConverted: 2,
+    imagesDownloaded: 0,
+    failedCount: 0,
+    elapsedMs: 1500
+  });
+  assert.doesNotMatch(html, /docs-md-fail-link/);
+  assert.match(html, /失败 0/);
+});
+
+test('computeStopControlState switches stop control between stop/continue states', () => {
+  assert.deepEqual(
+    crawler.computeStopControlState({
+      scanning: false,
+      exporting: false,
+      pauseRequested: false,
+      paused: false
+    }),
+    { label: '停止', disabled: true, mode: 'idle' }
+  );
+
+  assert.deepEqual(
+    crawler.computeStopControlState({
+      scanning: true,
+      exporting: false,
+      pauseRequested: false,
+      paused: false
+    }),
+    { label: '停止', disabled: false, mode: 'stop' }
+  );
+
+  assert.deepEqual(
+    crawler.computeStopControlState({
+      scanning: false,
+      exporting: true,
+      pauseRequested: true,
+      paused: false
+    }),
+    { label: '停止中...', disabled: true, mode: 'stopping' }
+  );
+
+  assert.deepEqual(
+    crawler.computeStopControlState({
+      scanning: false,
+      exporting: true,
+      pauseRequested: false,
+      paused: true
+    }),
+    { label: '继续', disabled: false, mode: 'resume' }
+  );
+});
+
+test('computeGroupSelectionState returns checked and indeterminate for group descendants', () => {
+  const entries = crawler.buildTreeItems(
+    [
+      { url: 'https://example.com/docs/start', title: 'Start' },
+      { url: 'https://example.com/docs/start/a/one', title: 'One' },
+      { url: 'https://example.com/docs/start/a/two', title: 'Two' },
+      { url: 'https://example.com/docs/start/b/three', title: 'Three' }
+    ],
+    'https://example.com/docs/start'
+  );
+
+  const none = crawler.computeGroupSelectionState(entries, 'a', new Set());
+  assert.deepEqual(
+    { checked: none.checked, indeterminate: none.indeterminate, total: none.total, selected: none.selected },
+    { checked: false, indeterminate: false, total: 2, selected: 0 }
+  );
+
+  const partial = crawler.computeGroupSelectionState(
+    entries,
+    'a',
+    new Set(['https://example.com/docs/start/a/one'])
+  );
+  assert.deepEqual(
+    { checked: partial.checked, indeterminate: partial.indeterminate, total: partial.total, selected: partial.selected },
+    { checked: false, indeterminate: true, total: 2, selected: 1 }
+  );
+
+  const all = crawler.computeGroupSelectionState(
+    entries,
+    'a',
+    new Set([
+      'https://example.com/docs/start/a/one',
+      'https://example.com/docs/start/a/two'
+    ])
+  );
+  assert.deepEqual(
+    { checked: all.checked, indeterminate: all.indeterminate, total: all.total, selected: all.selected },
+    { checked: true, indeterminate: false, total: 2, selected: 2 }
+  );
 });
