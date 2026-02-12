@@ -14,7 +14,7 @@
 // @require      https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js
 // @require      https://cdn.jsdelivr.net/npm/turndown-plugin-gfm@1.0.2/dist/turndown-plugin-gfm.js
 // ==/UserScript==
-// Webhook verification note: keep this line for sync test tracking.
+// Webhook verification note: sync test marker.
 
 (function bootstrap(factory) {
   if (typeof module !== 'undefined' && module.exports) {
