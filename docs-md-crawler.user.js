@@ -27,7 +27,6 @@
 
   const DEFAULT_EXCLUDES = ['/api/', '/login', '/admin', 'token='];
   const DEFAULTS = {
-    rootPath: '/docs',
     maxPages: 300,
     maxDepth: 6,
     requestDelayMs: 300,
@@ -68,7 +67,7 @@
     return pathname === rootPath || pathname.startsWith(rootPath + '/');
   }
 
-  function isDocUrl(url, origin, rootPath, excludePatterns) {
+  function isDocUrl(url, origin, baseUrl, excludePatterns) {
     try {
       const u = new URL(url);
       if (!/^https?:$/.test(u.protocol)) {
@@ -77,8 +76,12 @@
       if (u.origin !== origin) {
         return false;
       }
-      const cleanRoot = normalizeRootPath(rootPath);
-      if (!pathStartsWithRoot(u.pathname, cleanRoot)) {
+      const normalizedBase = normalizeUrl(baseUrl);
+      if (!normalizedBase) {
+        return false;
+      }
+      const base = new URL(normalizedBase);
+      if (!pathStartsWithRoot(u.pathname, base.pathname)) {
         return false;
       }
       const full = (u.pathname + u.search).toLowerCase();
@@ -345,8 +348,8 @@
     panel.innerHTML = [
       '<div id="docs-md-head"><span>Docs Markdown Crawler</span><button id="docs-md-close" type="button">×</button></div>',
       '<div id="docs-md-body">',
-      '  <label class="docs-md-mini">文档根路径</label>',
-      '  <input id="docs-md-root" value="' + DEFAULTS.rootPath + '" placeholder="/docs">',
+      '  <label class="docs-md-mini">扫描起点（当前页面）</label>',
+      '  <input id="docs-md-root" readonly placeholder="当前页面 URL">',
       '  <div id="docs-md-row">',
       '    <div><label class="docs-md-mini">最大页面数</label><input id="docs-md-max-pages" type="number" min="1" max="2000" value="' + DEFAULTS.maxPages + '"></div>',
       '    <div><label class="docs-md-mini">图片模式</label><select id="docs-md-image-mode"><option value="local" selected>下载本地</option><option value="external">保留外链</option></select></div>',
@@ -379,6 +382,7 @@
       tree: panel.querySelector('#docs-md-tree'),
       checkAll: panel.querySelector('#docs-md-check-all')
     };
+    state.elements.rootInput.value = normalizeUrl(location.href) || location.href;
 
     state.elements.fab.addEventListener('click', () => {
       panel.classList.toggle('open');
@@ -603,7 +607,7 @@
 
   async function discoverUrls(options) {
     const origin = options.origin;
-    const rootPath = normalizeRootPath(options.rootPath);
+    const startUrl = normalizeUrl(options.startUrl || location.href);
     const maxPages = options.maxPages;
     const maxDepth = options.maxDepth;
     const excludePatterns = options.excludePatterns || [];
@@ -616,7 +620,7 @@
     function addUrl(maybeUrl, depth) {
       const normalized = normalizeUrl(maybeUrl);
       if (!normalized) return;
-      if (!isDocUrl(normalized, origin, rootPath, excludePatterns)) return;
+      if (!isDocUrl(normalized, origin, startUrl, excludePatterns)) return;
       if (discovered.has(normalized)) return;
       if (discovered.size >= maxPages) return;
       discovered.add(normalized);
@@ -627,19 +631,7 @@
       updateProgress();
     }
 
-    addUrl(new URL(rootPath, origin).href, 0);
-
-    for (const link of collectCurrentPageLinks()) {
-      addUrl(link, 0);
-    }
-
-    const sitemapLinks = await discoverSitemapUrls(origin);
-    for (const link of sitemapLinks) {
-      addUrl(link, 0);
-      if (discovered.size >= maxPages || state.stopRequested) {
-        break;
-      }
-    }
+    addUrl(startUrl, 0);
 
     while (queue.length && discovered.size < maxPages && !state.stopRequested) {
       const current = queue.shift();
@@ -757,9 +749,9 @@
       return;
     }
 
-    const rootPath = normalizeRootPath(state.elements.rootInput.value || DEFAULTS.rootPath);
+    const startUrl = normalizeUrl(location.href) || location.href;
     const maxPages = Math.max(1, Math.min(2000, Number(state.elements.maxPagesInput.value) || DEFAULTS.maxPages));
-    state.elements.rootInput.value = rootPath;
+    state.elements.rootInput.value = startUrl;
     state.elements.maxPagesInput.value = String(maxPages);
 
     state.scanning = true;
@@ -773,12 +765,12 @@
     state.failCount = 0;
     state.queueCount = 0;
     state.currentUrl = '';
-    updateProgress('开始扫描...');
+    updateProgress('开始扫描当前页面及其子链接...');
 
     try {
       const urls = await discoverUrls({
         origin: location.origin,
-        rootPath,
+        startUrl,
         maxPages,
         maxDepth: DEFAULTS.maxDepth,
         excludePatterns: DEFAULT_EXCLUDES,
@@ -855,7 +847,7 @@
       return;
     }
 
-    const rootPath = normalizeRootPath(state.elements.rootInput.value || DEFAULTS.rootPath);
+    const exportRootPath = '/';
     const imageMode = state.elements.imageModeSelect.value || DEFAULTS.imageMode;
     const selected = selectedUrlsFromTree();
 
@@ -900,7 +892,7 @@
 
         const doc = new DOMParser().parseFromString(html, 'text/html');
         const title = extractDocTitle(doc, url);
-        const path = buildMarkdownPath(url, title, rootPath, usedPaths);
+        const path = buildMarkdownPath(url, title, exportRootPath, usedPaths);
 
         pageDrafts.push({
           url,

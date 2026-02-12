@@ -15,18 +15,27 @@ test('normalizeUrl strips hash and normalizes trailing slash', () => {
   assert.equal(crawler.normalizeUrl('https://example.com/'), 'https://example.com/');
 });
 
-test('isDocUrl keeps same-origin paths under root path', () => {
+test('isDocUrl keeps same-origin descendants under current page url', () => {
   const excludePatterns = ['/api/', '/login'];
+  const baseUrl = 'https://example.com/docs/start';
   assert.equal(
-    crawler.isDocUrl('https://example.com/docs/start', 'https://example.com', '/docs', excludePatterns),
+    crawler.isDocUrl('https://example.com/docs/start', 'https://example.com', baseUrl, excludePatterns),
     true
   );
   assert.equal(
-    crawler.isDocUrl('https://foo.com/docs/start', 'https://example.com', '/docs', excludePatterns),
+    crawler.isDocUrl('https://example.com/docs/start/child', 'https://example.com', baseUrl, excludePatterns),
+    true
+  );
+  assert.equal(
+    crawler.isDocUrl('https://example.com/docs/other', 'https://example.com', baseUrl, excludePatterns),
     false
   );
   assert.equal(
-    crawler.isDocUrl('https://example.com/api/users', 'https://example.com', '/', excludePatterns),
+    crawler.isDocUrl('https://foo.com/docs/start', 'https://example.com', baseUrl, excludePatterns),
+    false
+  );
+  assert.equal(
+    crawler.isDocUrl('https://example.com/docs/start/api/users', 'https://example.com', baseUrl, excludePatterns),
     false
   );
 });
