@@ -141,6 +141,25 @@ test('computeZipPackProgress converts JSZip metadata percent to 0-100 stage prog
   );
 });
 
+test('generateZipBlobWithFallback switches to uint8array when blob generation stalls', async () => {
+  const callTypes = [];
+  const zip = {
+    generateAsync(options) {
+      callTypes.push(options.type);
+      if (options.type === 'blob') {
+        return new Promise(() => {});
+      }
+      return Promise.resolve(Uint8Array.from([80, 75, 3, 4]));
+    }
+  };
+
+  const result = await crawler.generateZipBlobWithFallback(zip, { timeoutMs: 20 });
+  assert.deepEqual(callTypes, ['blob', 'uint8array']);
+  assert.equal(result.fallbackUsed, true);
+  assert.equal(result.timeoutTriggered, true);
+  assert.ok(result.blob instanceof Blob);
+});
+
 test('normalizeBinaryPayload converts binary-like values into Uint8Array for JSZip', async () => {
   const fromArrayBuffer = await crawler.normalizeBinaryPayload(Uint8Array.from([1, 2, 3]).buffer);
   assert.ok(fromArrayBuffer instanceof Uint8Array);

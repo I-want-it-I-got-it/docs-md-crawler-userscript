@@ -31,7 +31,8 @@
     requestDelayMs: 300,
     timeoutMs: 15000,
     retries: 2,
-    imageMode: 'local'
+    imageMode: 'local',
+    zipPackTimeoutMs: 20000
   };
   const EXPORT_BUTTON_IDLE_TEXT = '导出 ZIP';
   const EXPORT_STAGE_SEQUENCE = ['页面抓取', 'Markdown转换', '图片下载', 'ZIP打包'];
@@ -335,6 +336,111 @@
     }
     const completed = Math.min(100, Math.max(0, Math.round(rawPercent)));
     return computeStageProgress(completed, 100);
+  }
+
+  function withTimeout(promise, timeoutMs, message) {
+    const ms = Number(timeoutMs);
+    if (!Number.isFinite(ms) || ms <= 0) {
+      return promise;
+    }
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(new Error(message || 'timeout'));
+      }, ms);
+
+      Promise.resolve(promise).then(
+        (value) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
+          reject(err);
+        }
+      );
+    });
+  }
+
+  function isLikelyBlobSupportError(err) {
+    const message = String((err && err.message) || '').toLowerCase();
+    if (!message) {
+      return false;
+    }
+    const mentionsBlobType = message.includes('blob') || message.includes('type');
+    const mentionsUnsupported = message.includes('unsupported') ||
+      message.includes('not support') ||
+      message.includes('invalid');
+    return mentionsBlobType && mentionsUnsupported;
+  }
+
+  function toZipBlob(payload) {
+    if (isBlobValue(payload)) {
+      return payload;
+    }
+
+    const BlobCtor = typeof Blob !== 'undefined' ? Blob : null;
+    if (!BlobCtor) {
+      throw new Error('blob-not-supported');
+    }
+
+    if (isArrayBufferValue(payload)) {
+      return new BlobCtor([payload], { type: 'application/zip' });
+    }
+
+    if (ArrayBuffer.isView(payload)) {
+      const bytes = copyToUint8Array(new Uint8Array(payload.buffer, payload.byteOffset || 0, payload.byteLength || 0));
+      return new BlobCtor([bytes], { type: 'application/zip' });
+    }
+
+    throw new Error('unsupported-zip-payload');
+  }
+
+  async function generateZipBlobWithFallback(zip, options) {
+    if (!zip || typeof zip.generateAsync !== 'function') {
+      throw new Error('invalid-zip-instance');
+    }
+
+    const opts = options || {};
+    const timeoutMs = Number(opts.timeoutMs) || DEFAULTS.zipPackTimeoutMs;
+    const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : undefined;
+
+    try {
+      const blob = await withTimeout(
+        zip.generateAsync({ type: 'blob' }, onProgress),
+        timeoutMs,
+        'zip-pack-timeout'
+      );
+      return {
+        blob,
+        fallbackUsed: false,
+        timeoutTriggered: false
+      };
+    } catch (err) {
+      const timeoutTriggered = err && err.message === 'zip-pack-timeout';
+      if (!timeoutTriggered && !isLikelyBlobSupportError(err)) {
+        throw err;
+      }
+
+      const bytes = await zip.generateAsync({ type: 'uint8array' }, onProgress);
+      return {
+        blob: toZipBlob(bytes),
+        fallbackUsed: true,
+        timeoutTriggered
+      };
+    }
   }
 
   function formatBytes(bytes) {
@@ -743,6 +849,7 @@
       computeStopControlState,
       formatFailureReason,
       normalizeBinaryPayload,
+      generateZipBlobWithFallback,
       normalizeRootPath,
       sanitizeSegment,
       relativePath,
@@ -1995,10 +2102,19 @@
       }
 
       updateExportStage('ZIP打包', 0, 100);
-      const blob = await zip.generateAsync({ type: 'blob' }, (metadata) => {
-        const progress = computeZipPackProgress(metadata);
-        updateExportStage('ZIP打包', progress.completed, progress.total);
+      const zipPack = await generateZipBlobWithFallback(zip, {
+        timeoutMs: DEFAULTS.zipPackTimeoutMs,
+        onProgress: (metadata) => {
+          const progress = computeZipPackProgress(metadata);
+          updateExportStage('ZIP打包', progress.completed, progress.total);
+        }
       });
+      if (zipPack.fallbackUsed) {
+        setStatus(zipPack.timeoutTriggered
+          ? 'ZIP 打包主通道超时，已自动切换兼容模式'
+          : 'ZIP 打包主通道不兼容，已自动切换兼容模式');
+      }
+      const blob = zipPack.blob;
       updateExportStage('ZIP打包', 100, 100);
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const filename = 'docs-md-export-' + stamp + '.zip';
