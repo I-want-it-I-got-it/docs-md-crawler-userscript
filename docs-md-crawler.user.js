@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.0
+// @version      0.2.1
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -298,6 +298,15 @@
     return { completed: bounded, total, percent };
   }
 
+  function computeZipPackProgress(metadata) {
+    const rawPercent = metadata && Number(metadata.percent);
+    if (!Number.isFinite(rawPercent)) {
+      return { completed: 0, total: 100, percent: 0 };
+    }
+    const completed = Math.min(100, Math.max(0, Math.round(rawPercent)));
+    return computeStageProgress(completed, 100);
+  }
+
   function formatBytes(bytes) {
     const value = Number(bytes) || 0;
     if (value >= 1024 * 1024) {
@@ -327,6 +336,15 @@
       '占用: HTML ' + formatBytes(htmlBytes) + ' | 图片 ' + formatBytes(imageBytes) + ' | 总计 ' + formatBytes(totalBytes),
       '任务: 页面抓取 ' + pageFetched + ' | 页面转换 ' + pageConverted + ' | 图片下载 ' + imagesDownloaded + ' | 失败 ' + failedCount + ' | 耗时 ' + formatDuration(elapsedMs)
     ].join('\n');
+  }
+
+  function buildFailedQueueItems(failedItems) {
+    return (failedItems || []).map((item) => ({
+      id: item.id,
+      url: item.url,
+      reason: item.reason,
+      title: getDisplayTitle(item.url, item.title || '')
+    }));
   }
 
   function sleep(ms) {
@@ -432,8 +450,10 @@
       buildMarkdownPath,
       getDisplayTitle,
       buildTreeItems,
+      buildFailedQueueItems,
       computeSelectAllState,
       computeStageProgress,
+      computeZipPackProgress,
       formatUsageStats,
       normalizeRootPath,
       sanitizeSegment,
@@ -453,6 +473,7 @@
     queueCount: 0,
     currentUrl: '',
     scanStartUrl: '',
+    failedSeq: 0,
     elements: {},
     scanSession: 0
   };
@@ -470,7 +491,11 @@
       '#docs-md-scan{background:#164e63;color:#fff}',
       '#docs-md-export{background:#0a7f38;color:#fff}',
       '#docs-md-stop{background:#8c2f39;color:#fff}',
-      '#docs-md-status{background:#f7f9fc;border:1px solid #dbe3ef;border-radius:8px;padding:8px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}',
+      '#docs-md-status{background:#f7f9fc;border:1px solid #dbe3ef;border-radius:8px;padding:8px;display:flex;gap:8px;align-items:flex-start;justify-content:space-between}',
+      '#docs-md-status-text{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;flex:1;min-width:0}',
+      '#docs-md-fail-toggle{border:1px solid #cbd5e1;border-radius:999px;background:#fff;padding:2px 8px;font-size:11px;line-height:1.5;color:#475569;cursor:pointer;white-space:nowrap}',
+      '#docs-md-fail-toggle.has-fail{color:#b91c1c;border-color:#fecaca;background:#fff1f2}',
+      '#docs-md-fail-toggle:disabled{cursor:not-allowed;opacity:.6}',
       '#docs-md-export-progress{border:1px solid #dbe3ef;background:#f9fbff;border-radius:8px;padding:8px;display:none;gap:6px;flex-direction:column}',
       '#docs-md-export-progress.active{display:flex}',
       '#docs-md-progress-bar{width:100%;height:8px;background:#e5eaf3;border-radius:999px;overflow:hidden}',
@@ -478,11 +503,14 @@
       '#docs-md-progress-text{font-size:12px;color:#334155}',
       '#docs-md-usage{font-size:11px;color:#64748b;white-space:pre-wrap}',
       '#docs-md-tree{border:1px solid #dbe3ef;border-radius:8px;padding:8px;max-height:260px;overflow:auto;background:#fbfcff}',
+      '#docs-md-failed-wrap{border:1px solid #fecaca;border-radius:8px;padding:8px;max-height:180px;overflow:auto;background:#fff7f7;display:none}',
+      '#docs-md-failed-wrap.open{display:block}',
       '.docs-md-item{display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-bottom:1px dashed #eef2f7}',
       '.docs-md-item:last-child{border-bottom:0}',
       '.docs-md-item-content{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}',
       '.docs-md-item-title{font-weight:600;word-break:break-word}',
       '.docs-md-item-group{font-weight:700;color:#0f172a}',
+      '.docs-md-retry{border:1px solid #d5dbe7;border-radius:6px;background:#fff;padding:2px 8px;font-size:12px;cursor:pointer;flex-shrink:0}',
       '.docs-md-mini{font-size:12px;color:#4b5563}',
       '#docs-md-close{background:transparent;border:0;font-size:18px;line-height:1;cursor:pointer;color:#1f2937}'
     ].join('');
@@ -513,7 +541,8 @@
       '    <button id="docs-md-export" type="button">导出 ZIP</button>',
       '    <button id="docs-md-stop" type="button">停止</button>',
       '  </div>',
-      '  <div id="docs-md-status">等待手动扫描</div>',
+      '  <div id="docs-md-status"><div id="docs-md-status-text">等待手动扫描</div><button id="docs-md-fail-toggle" type="button" disabled>失败: 0</button></div>',
+      '  <div id="docs-md-failed-wrap"><div id="docs-md-failed-tree">暂无失败项</div></div>',
       '  <div id="docs-md-export-progress">',
       '    <div id="docs-md-progress-bar"><div id="docs-md-progress-fill"></div></div>',
       '    <div id="docs-md-progress-text">导出进度: 0/0 (0%)</div>',
@@ -536,6 +565,10 @@
       exportBtn: panel.querySelector('#docs-md-export'),
       stopBtn: panel.querySelector('#docs-md-stop'),
       status: panel.querySelector('#docs-md-status'),
+      statusText: panel.querySelector('#docs-md-status-text'),
+      failToggle: panel.querySelector('#docs-md-fail-toggle'),
+      failedWrap: panel.querySelector('#docs-md-failed-wrap'),
+      failedTree: panel.querySelector('#docs-md-failed-tree'),
       exportProgress: panel.querySelector('#docs-md-export-progress'),
       progressFill: panel.querySelector('#docs-md-progress-fill'),
       progressText: panel.querySelector('#docs-md-progress-text'),
@@ -566,11 +599,184 @@
       });
       syncSelectAllState();
     });
+
+    state.elements.failToggle.addEventListener('click', () => {
+      if (state.failCount <= 0) {
+        return;
+      }
+      const opened = state.elements.failedWrap.classList.toggle('open');
+      if (opened) {
+        renderFailedQueue();
+      }
+    });
+
+    updateFailToggle();
+    renderFailedQueue();
   }
 
   function setStatus(text) {
-    if (state.elements.status) {
-      state.elements.status.textContent = text;
+    if (state.elements.statusText) {
+      state.elements.statusText.textContent = text;
+    }
+    updateFailToggle();
+  }
+
+  function setFailedWrapVisible(visible) {
+    if (!state.elements.failedWrap) {
+      return;
+    }
+    if (visible) {
+      state.elements.failedWrap.classList.add('open');
+    } else {
+      state.elements.failedWrap.classList.remove('open');
+    }
+  }
+
+  function updateFailToggle() {
+    if (!state.elements.failToggle) {
+      return;
+    }
+    const count = state.failed.length;
+    state.failCount = count;
+    state.elements.failToggle.textContent = '失败: ' + count;
+    state.elements.failToggle.disabled = count <= 0;
+    state.elements.failToggle.classList.toggle('has-fail', count > 0);
+    if (count <= 0) {
+      setFailedWrapVisible(false);
+    }
+  }
+
+  function renderFailedQueue() {
+    if (!state.elements.failedTree) {
+      return;
+    }
+    const tree = state.elements.failedTree;
+    tree.innerHTML = '';
+    const items = buildFailedQueueItems(state.failed);
+    if (!items.length) {
+      tree.textContent = '暂无失败项';
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    items.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'docs-md-item';
+
+      const content = document.createElement('span');
+      content.className = 'docs-md-item-content';
+
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 'docs-md-item-title';
+      titleSpan.textContent = item.title;
+      content.appendChild(titleSpan);
+
+      const retryBtn = document.createElement('button');
+      retryBtn.type = 'button';
+      retryBtn.className = 'docs-md-retry';
+      retryBtn.textContent = '重试';
+      retryBtn.addEventListener('click', () => {
+        retryFailedItem(item.id, retryBtn);
+      });
+
+      row.appendChild(content);
+      row.appendChild(retryBtn);
+      frag.appendChild(row);
+    });
+
+    tree.appendChild(frag);
+  }
+
+  function addFailed(url, reason, title) {
+    state.failedSeq += 1;
+    const item = {
+      id: state.failedSeq,
+      url,
+      reason,
+      title: title || ''
+    };
+    state.failed.push(item);
+    state.failCount = state.failed.length;
+    renderFailedQueue();
+    updateFailToggle();
+    return item;
+  }
+
+  function removeFailedById(failedId) {
+    const index = state.failed.findIndex((item) => item.id === failedId);
+    if (index < 0) {
+      return null;
+    }
+    const removed = state.failed.splice(index, 1)[0];
+    state.failCount = state.failed.length;
+    renderFailedQueue();
+    updateFailToggle();
+    return removed;
+  }
+
+  async function retryFailedItem(failedId, buttonEl) {
+    if (state.scanning || state.exporting) {
+      setStatus('扫描或导出进行中，暂不可重试失败项');
+      return;
+    }
+    const failedItem = state.failed.find((item) => item.id === failedId);
+    if (!failedItem) {
+      return;
+    }
+
+    if (buttonEl) {
+      buttonEl.disabled = true;
+      buttonEl.textContent = '重试中...';
+    }
+
+    try {
+      const reason = String(failedItem.reason || '');
+      if (reason.startsWith('image-download-fail:')) {
+        await fetchBinaryWithRetry(failedItem.url, DEFAULTS.retries, DEFAULTS.requestDelayMs);
+      } else {
+        const html = await fetchTextWithRetry(failedItem.url, DEFAULTS.retries, DEFAULTS.requestDelayMs);
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const title = extractDocTitle(doc, failedItem.url);
+        failedItem.title = title;
+
+        if (reason.startsWith('markdown-fail:')) {
+          const mainNode = extractMainNode(doc);
+          cleanNodeForMarkdown(mainNode);
+          const turndown = createTurndownService();
+          turndown.turndown(mainNode);
+        }
+
+        if (reason.startsWith('discover:')) {
+          const normalized = normalizeUrl(failedItem.url);
+          const baseUrl = state.scanStartUrl || normalizeUrl(location.href) || location.href;
+          if (
+            normalized &&
+            !state.discoveredUrls.some((item) => item.url === normalized) &&
+            isDocUrl(normalized, location.origin, baseUrl, DEFAULT_EXCLUDES)
+          ) {
+            state.discoveredUrls.push({
+              url: normalized,
+              title: getDisplayTitle(normalized, title)
+            });
+            state.discoveredUrls.sort((a, b) => a.url.localeCompare(b.url));
+            renderTree(state.discoveredUrls);
+          }
+        }
+      }
+
+      const removed = removeFailedById(failedId);
+      const doneTitle = getDisplayTitle(failedItem.url, (removed && removed.title) || failedItem.title || '');
+      updateProgress('重试成功: ' + doneTitle);
+    } catch (err) {
+      failedItem.reason = 'retry-fail:' + (err && err.message ? err.message : 'failed');
+      renderFailedQueue();
+      updateFailToggle();
+      setStatus('重试失败: ' + getDisplayTitle(failedItem.url, failedItem.title || ''));
+    } finally {
+      if (buttonEl && buttonEl.isConnected) {
+        buttonEl.disabled = false;
+        buttonEl.textContent = '重试';
+      }
     }
   }
 
@@ -624,7 +830,6 @@
     const lines = [
       '发现: ' + state.foundCount,
       '队列: ' + state.queueCount,
-      '失败: ' + state.failCount,
       extra || ''
     ].filter(Boolean);
     setStatus(lines.join('\n'));
@@ -878,8 +1083,7 @@
       try {
         html = await fetchTextWithRetry(current, options.retries, options.requestDelayMs);
       } catch (err) {
-        state.failed.push({ url: current, reason: 'discover:' + (err && err.message ? err.message : 'failed') });
-        state.failCount = state.failed.length;
+        addFailed(current, 'discover:' + (err && err.message ? err.message : 'failed'));
         updateProgress();
         await sleep(options.requestDelayMs);
         continue;
@@ -989,6 +1193,8 @@
     const mySession = state.scanSession;
     state.discoveredUrls = [];
     state.failed = [];
+    renderFailedQueue();
+    updateFailToggle();
     state.foundCount = 0;
     state.doneCount = 0;
     state.failCount = 0;
@@ -1051,11 +1257,7 @@
           onSuccess(binary.byteLength || 0);
         }
       } catch (err) {
-        state.failed.push({
-          url: job.url,
-          reason: 'image-download-fail:' + (err && err.message ? err.message : 'failed')
-        });
-        state.failCount = state.failed.length;
+        addFailed(job.url, 'image-download-fail:' + (err && err.message ? err.message : 'failed'));
       }
       if (typeof onProgress === 'function') {
         onProgress(i + 1, uniqueJobs.length);
@@ -1093,6 +1295,7 @@
     state.stopRequested = false;
     state.doneCount = 0;
     state.failCount = state.failed.length;
+    updateFailToggle();
     state.currentUrl = '';
 
     const exportStats = {
@@ -1138,11 +1341,8 @@
           exportStats.pageFetched += 1;
           exportStats.htmlBytes += new TextEncoder().encode(html).length;
         } catch (err) {
-          state.failed.push({
-            url,
-            reason: 'page-fetch-fail:' + (err && err.message ? err.message : 'failed')
-          });
-          state.failCount = state.failed.length;
+          const matched = state.discoveredUrls.find((item) => item.url === url);
+          addFailed(url, 'page-fetch-fail:' + (err && err.message ? err.message : 'failed'), matched ? matched.title : '');
           fetchProcessed += 1;
           updateExportStage('页面抓取', fetchProcessed, selected.length);
           continue;
@@ -1202,11 +1402,7 @@
         try {
           markdown = turndown.turndown(mainNode);
         } catch (err) {
-          state.failed.push({
-            url: page.url,
-            reason: 'markdown-fail:' + (err && err.message ? err.message : 'failed')
-          });
-          state.failCount = state.failed.length;
+          addFailed(page.url, 'markdown-fail:' + (err && err.message ? err.message : 'failed'), page.title);
           convertProcessed += 1;
           updateExportStage('Markdown转换', convertProcessed, pageDrafts.length);
           continue;
@@ -1256,9 +1452,12 @@
         zip.file('failed-urls.txt', failText + '\n');
       }
 
-      updateExportStage('ZIP打包', 0, 1);
-      const blob = await zip.generateAsync({ type: 'blob' });
-      updateExportStage('ZIP打包', 1, 1);
+      updateExportStage('ZIP打包', 0, 100);
+      const blob = await zip.generateAsync({ type: 'blob' }, (metadata) => {
+        const progress = computeZipPackProgress(metadata);
+        updateExportStage('ZIP打包', progress.completed, progress.total);
+      });
+      updateExportStage('ZIP打包', 100, 100);
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const filename = 'docs-md-export-' + stamp + '.zip';
 

@@ -106,6 +106,29 @@ test('computeStageProgress calculates bounded stage percentage', () => {
   assert.deepEqual(crawler.computeStageProgress(0, 0), { completed: 0, total: 0, percent: 100 });
 });
 
+test('computeZipPackProgress converts JSZip metadata percent to 0-100 stage progress', () => {
+  assert.deepEqual(
+    crawler.computeZipPackProgress({ percent: 0 }),
+    { completed: 0, total: 100, percent: 0 }
+  );
+  assert.deepEqual(
+    crawler.computeZipPackProgress({ percent: 12.4 }),
+    { completed: 12, total: 100, percent: 12 }
+  );
+  assert.deepEqual(
+    crawler.computeZipPackProgress({ percent: 99.6 }),
+    { completed: 100, total: 100, percent: 100 }
+  );
+  assert.deepEqual(
+    crawler.computeZipPackProgress({ percent: 130 }),
+    { completed: 100, total: 100, percent: 100 }
+  );
+  assert.deepEqual(
+    crawler.computeZipPackProgress({}),
+    { completed: 0, total: 100, percent: 0 }
+  );
+});
+
 test('formatUsageStats renders export usage counters', () => {
   const text = crawler.formatUsageStats({
     htmlBytes: 2048,
@@ -124,4 +147,22 @@ test('formatUsageStats renders export usage counters', () => {
   assert.match(text, /图片下载 8/);
   assert.match(text, /失败 1/);
   assert.match(text, /耗时 6\.5s/);
+});
+
+test('buildFailedQueueItems renders title-only entries with fallback title', () => {
+  const entries = crawler.buildFailedQueueItems([
+    { id: 1, url: 'https://example.com/docs/start/alpha', reason: 'discover:timeout' },
+    { id: 2, url: 'https://example.com/docs/start/beta', title: 'Beta 文档', reason: 'page-fetch-fail:500' }
+  ]);
+  assert.deepEqual(
+    entries.map((item) => ({
+      id: item.id,
+      title: item.title,
+      reason: item.reason
+    })),
+    [
+      { id: 1, title: 'alpha', reason: 'discover:timeout' },
+      { id: 2, title: 'Beta 文档', reason: 'page-fetch-fail:500' }
+    ]
+  );
 });
