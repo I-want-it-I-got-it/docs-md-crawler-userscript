@@ -1,6 +1,0 @@
-[   15825ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://zip-e2e.invalid/docs/start/index.html:0
-[   16581ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://zip-e2e.invalid/docs/start/index.html:0
-[   17650ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://zip-e2e.invalid/docs/start/index.html:0
-[   19046ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://zip-e2e.invalid/docs/start/index.html:0
-[   19787ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://zip-e2e.invalid/docs/start/index.html:0
-[   20862ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_CLOSED @ https://zip-e2e.invalid/docs/start/index.html:0
