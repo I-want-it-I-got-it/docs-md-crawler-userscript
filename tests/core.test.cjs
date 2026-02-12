@@ -51,3 +51,18 @@ test('buildMarkdownPath uses url segment + title and resolves collisions', () =>
   const c = crawler.buildMarkdownPath('https://example.com/docs/guide/', '快速开始', '/docs', used);
   assert.equal(c, 'docs/guide/index__快速开始.md');
 });
+
+test('getDisplayTitle prefers page title and falls back to url segment', () => {
+  assert.equal(
+    crawler.getDisplayTitle('https://example.com/docs/start/intro', 'Introduction'),
+    'Introduction'
+  );
+  assert.equal(
+    crawler.getDisplayTitle('https://example.com/docs/start/quick-start', ''),
+    'quick-start'
+  );
+  assert.equal(
+    crawler.getDisplayTitle('https://example.com/docs/start/', ''),
+    'start'
+  );
+});

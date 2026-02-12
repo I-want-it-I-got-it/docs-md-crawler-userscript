@@ -124,6 +124,21 @@
     return pathname.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
   }
 
+  function getDisplayTitle(url, rawTitle) {
+    const plainTitle = String(rawTitle || '').trim();
+    if (plainTitle) {
+      return sanitizeSegment(plainTitle, 'index');
+    }
+    try {
+      const u = new URL(url);
+      const segments = splitPathSegments(u.pathname);
+      const leaf = segments.length ? segments[segments.length - 1] : 'index';
+      return sanitizeSegment(decodeURIComponent(leaf), 'index');
+    } catch (_) {
+      return 'index';
+    }
+  }
+
   function toRelativeSegments(pathSegments, rootSegments) {
     if (!rootSegments.length) {
       return pathSegments.slice();
@@ -284,6 +299,7 @@
       normalizeUrl,
       isDocUrl,
       buildMarkdownPath,
+      getDisplayTitle,
       normalizeRootPath,
       sanitizeSegment,
       relativePath
@@ -323,7 +339,9 @@
       '#docs-md-tree{border:1px solid #dbe3ef;border-radius:8px;padding:8px;max-height:260px;overflow:auto;background:#fbfcff}',
       '.docs-md-item{display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-bottom:1px dashed #eef2f7}',
       '.docs-md-item:last-child{border-bottom:0}',
-      '.docs-md-item span{word-break:break-all}',
+      '.docs-md-item-content{display:flex;flex-direction:column;gap:2px;min-width:0}',
+      '.docs-md-item-title{font-weight:600;word-break:break-word}',
+      '.docs-md-item-url{word-break:break-all;color:#64748b;font-size:12px}',
       '.docs-md-mini{font-size:12px;color:#4b5563}',
       '#docs-md-close{background:transparent;border:0;font-size:18px;line-height:1;cursor:pointer;color:#1f2937}'
     ].join('');
@@ -425,27 +443,39 @@
     setStatus(lines.join('\n'));
   }
 
-  function renderTree(urls) {
+  function renderTree(items) {
     const tree = state.elements.tree;
     tree.innerHTML = '';
 
-    if (!urls.length) {
+    if (!items.length) {
       tree.textContent = '未发现文档链接';
       return;
     }
 
     const frag = document.createDocumentFragment();
-    for (const item of urls) {
+    for (const item of items) {
       const row = document.createElement('label');
       row.className = 'docs-md-item';
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = true;
-      cb.dataset.url = item;
-      const span = document.createElement('span');
-      span.textContent = item;
+      cb.dataset.url = item.url;
+
+      const content = document.createElement('span');
+      content.className = 'docs-md-item-content';
+
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 'docs-md-item-title';
+      titleSpan.textContent = getDisplayTitle(item.url, item.title || '');
+
+      const urlSpan = document.createElement('span');
+      urlSpan.className = 'docs-md-item-url';
+      urlSpan.textContent = item.url;
+
+      content.appendChild(titleSpan);
+      content.appendChild(urlSpan);
       row.appendChild(cb);
-      row.appendChild(span);
+      row.appendChild(content);
       frag.appendChild(row);
     }
     tree.appendChild(frag);
@@ -613,6 +643,7 @@
     const excludePatterns = options.excludePatterns || [];
 
     const discovered = new Set();
+    const titles = new Map();
     const visited = new Set();
     const queue = [];
     const depthMap = new Map();
@@ -662,6 +693,13 @@
         continue;
       }
 
+      try {
+        const pageDoc = new DOMParser().parseFromString(html, 'text/html');
+        titles.set(current, extractDocTitle(pageDoc, current));
+      } catch (_) {
+        // keep fallback title
+      }
+
       const links = parseLinksFromHtml(html, current);
       for (const link of links) {
         addUrl(link, depth + 1);
@@ -673,7 +711,10 @@
       await sleep(options.requestDelayMs);
     }
 
-    return Array.from(discovered).sort();
+    return Array.from(discovered).sort().map((url) => ({
+      url,
+      title: getDisplayTitle(url, titles.get(url) || '')
+    }));
   }
 
   function selectedUrlsFromTree() {
