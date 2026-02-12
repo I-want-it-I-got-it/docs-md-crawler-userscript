@@ -409,15 +409,11 @@
   function computeStopControlState(flags) {
     const running = Boolean(flags && (flags.scanning || flags.exporting));
     const paused = Boolean(flags && flags.paused);
-    const pauseRequested = Boolean(flags && flags.pauseRequested);
     if (!running) {
       return { label: '停止', disabled: true, mode: 'idle' };
     }
     if (paused) {
       return { label: '继续', disabled: false, mode: 'resume' };
-    }
-    if (pauseRequested) {
-      return { label: '停止中...', disabled: true, mode: 'stopping' };
     }
     return { label: '停止', disabled: false, mode: 'stop' };
   }
@@ -434,6 +430,71 @@
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function copyToUint8Array(view) {
+    const source = view instanceof Uint8Array ? view : new Uint8Array(view);
+    const copy = new Uint8Array(source.byteLength);
+    copy.set(source);
+    return copy;
+  }
+
+  function isArrayBufferValue(value) {
+    if (!value) {
+      return false;
+    }
+    if (typeof ArrayBuffer !== 'undefined' && value instanceof ArrayBuffer) {
+      return true;
+    }
+    return Object.prototype.toString.call(value) === '[object ArrayBuffer]';
+  }
+
+  function isBlobValue(value) {
+    if (!value) {
+      return false;
+    }
+    if (typeof Blob !== 'undefined' && value instanceof Blob) {
+      return true;
+    }
+    return typeof value.arrayBuffer === 'function' && typeof value.size === 'number';
+  }
+
+  function stringToBinaryBytes(value) {
+    const raw = String(value || '');
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i += 1) {
+      bytes[i] = raw.charCodeAt(i) & 0xff;
+    }
+    return bytes;
+  }
+
+  async function normalizeBinaryPayload(payload) {
+    if (payload == null) {
+      return null;
+    }
+
+    if (isArrayBufferValue(payload)) {
+      return copyToUint8Array(new Uint8Array(payload));
+    }
+
+    if (ArrayBuffer.isView(payload)) {
+      return copyToUint8Array(new Uint8Array(payload.buffer, payload.byteOffset || 0, payload.byteLength || 0));
+    }
+
+    if (isBlobValue(payload)) {
+      try {
+        const buffer = await payload.arrayBuffer();
+        return copyToUint8Array(new Uint8Array(buffer));
+      } catch (_) {
+        return null;
+      }
+    }
+
+    if (typeof payload === 'string') {
+      return stringToBinaryBytes(payload);
+    }
+
+    return null;
   }
 
   function parseSitemapsFromRobots(robotsText, origin) {
@@ -680,6 +741,7 @@
       buildUsageStatsMarkup,
       computeStopControlState,
       formatFailureReason,
+      normalizeBinaryPayload,
       normalizeRootPath,
       sanitizeSegment,
       relativePath,
@@ -1159,6 +1221,9 @@
     }
     state.pauseRequested = false;
     state.paused = false;
+    if (state.scanning) {
+      setScanButtonBusy(true);
+    }
     flushPauseResolvers();
     setStopButtonState();
     setStatus('继续当前任务...');
@@ -1171,6 +1236,9 @@
     if (state.pauseRequested) {
       state.pauseRequested = false;
       state.paused = true;
+      if (state.scanning) {
+        setScanButtonBusy(false);
+      }
       setStopButtonState();
       setStatus('任务已停止，点击“继续”恢复');
     }
@@ -1401,8 +1469,15 @@
           timeoutMs: DEFAULTS.timeoutMs,
           responseType: 'arraybuffer'
         });
-        if (resp.status >= 200 && resp.status < 400 && resp.response) {
-          return resp.response;
+        if (resp.status >= 200 && resp.status < 400) {
+          const payload = resp.response != null ? resp.response : resp.responseText;
+          const normalized = await normalizeBinaryPayload(payload);
+          if (normalized) {
+            return normalized;
+          }
+          const type = Object.prototype.toString.call(payload);
+          lastError = new Error('unsupported-binary:' + type);
+          continue;
         }
         lastError = new Error('http-' + resp.status);
       } catch (err) {
@@ -1712,9 +1787,9 @@
       const job = uniqueJobs[i];
       try {
         const binary = await fetchBinaryWithRetry(job.url, DEFAULTS.retries, DEFAULTS.requestDelayMs);
-        zip.file(job.path, binary);
+        zip.file(job.path, binary, { binary: true });
         if (typeof onSuccess === 'function') {
-          onSuccess(binary.byteLength || 0);
+          onSuccess(binary.byteLength || binary.length || 0);
         }
       } catch (err) {
         addFailed(job.url, 'image-download-fail:' + (err && err.message ? err.message : 'failed'));

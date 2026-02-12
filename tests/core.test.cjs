@@ -141,6 +141,30 @@ test('computeZipPackProgress converts JSZip metadata percent to 0-100 stage prog
   );
 });
 
+test('normalizeBinaryPayload converts binary-like values into Uint8Array for JSZip', async () => {
+  const fromArrayBuffer = await crawler.normalizeBinaryPayload(Uint8Array.from([1, 2, 3]).buffer);
+  assert.ok(fromArrayBuffer instanceof Uint8Array);
+  assert.deepEqual(Array.from(fromArrayBuffer), [1, 2, 3]);
+
+  const fromTypedArray = await crawler.normalizeBinaryPayload(new Uint16Array([255, 1024]));
+  assert.ok(fromTypedArray instanceof Uint8Array);
+  assert.deepEqual(Array.from(fromTypedArray), [255, 0, 0, 4]);
+
+  const fromString = await crawler.normalizeBinaryPayload('\x00\xffA');
+  assert.ok(fromString instanceof Uint8Array);
+  assert.deepEqual(Array.from(fromString), [0, 255, 65]);
+
+  const blob = new Blob([Uint8Array.from([7, 8, 9])], { type: 'application/octet-stream' });
+  const fromBlob = await crawler.normalizeBinaryPayload(blob);
+  assert.ok(fromBlob instanceof Uint8Array);
+  assert.deepEqual(Array.from(fromBlob), [7, 8, 9]);
+});
+
+test('normalizeBinaryPayload returns null for unsupported payload types', async () => {
+  const payload = await crawler.normalizeBinaryPayload({ any: 'value' });
+  assert.equal(payload, null);
+});
+
 test('formatUsageStats renders export usage counters', () => {
   const text = crawler.formatUsageStats({
     htmlBytes: 2048,
@@ -192,6 +216,8 @@ test('buildUiStyles provides shadcn-style tokens and button variants', () => {
   assert.match(css, /\.docs-md-fail-link\{/);
   assert.match(css, /text-decoration-style:dashed/);
   assert.match(css, /\.docs-md-square-check\{/);
+  assert.match(css, /\.docs-md-square-check:checked::before/);
+  assert.match(css, /\.docs-md-square-check:indeterminate::before/);
   assert.match(css, /\.docs-md-group-separator\{/);
   assert.match(css, /\.docs-md-inline-field\{/);
 });
@@ -297,7 +323,7 @@ test('computeStopControlState switches stop control between stop/continue states
       pauseRequested: true,
       paused: false
     }),
-    { label: '停止中...', disabled: true, mode: 'stopping' }
+    { label: '停止', disabled: false, mode: 'stop' }
   );
 
   assert.deepEqual(
