@@ -160,6 +160,39 @@ test('generateZipBlobWithFallback switches to uint8array when blob generation st
   assert.ok(result.blob instanceof Blob);
 });
 
+test('triggerZipDownloadByUrl prefers GM download path when available', async () => {
+  const calls = [];
+  const result = await crawler.triggerZipDownloadByUrl('blob:zip-1', 'demo.zip', {
+    gmDownloadByUrl: async (url, name) => {
+      calls.push(['gm', url, name]);
+    },
+    anchorDownloadByUrl: async () => {
+      calls.push(['anchor']);
+    }
+  });
+
+  assert.deepEqual(calls, [['gm', 'blob:zip-1', 'demo.zip']]);
+  assert.equal(result.method, 'gm_download');
+  assert.equal(result.usedFallback, false);
+});
+
+test('triggerZipDownloadByUrl falls back to anchor when GM download fails', async () => {
+  const calls = [];
+  const result = await crawler.triggerZipDownloadByUrl('blob:zip-2', 'demo.zip', {
+    gmDownloadByUrl: async () => {
+      throw new Error('not_whitelisted');
+    },
+    anchorDownloadByUrl: async (url, name) => {
+      calls.push(['anchor', url, name]);
+    }
+  });
+
+  assert.deepEqual(calls, [['anchor', 'blob:zip-2', 'demo.zip']]);
+  assert.equal(result.method, 'anchor');
+  assert.equal(result.usedFallback, true);
+  assert.equal(result.errorMessage, 'not_whitelisted');
+});
+
 test('normalizeBinaryPayload converts binary-like values into Uint8Array for JSZip', async () => {
   const fromArrayBuffer = await crawler.normalizeBinaryPayload(Uint8Array.from([1, 2, 3]).buffer);
   assert.ok(fromArrayBuffer instanceof Uint8Array);

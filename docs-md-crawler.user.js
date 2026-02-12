@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.1
+// @version      0.2.2
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -9,6 +9,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_download
 // @connect      *
 // @require      https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js
 // @require      https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js
@@ -443,6 +444,126 @@
     }
   }
 
+  function normalizeErrorMessage(err, fallback) {
+    const fromMessage = err && err.message ? String(err.message).trim() : '';
+    if (fromMessage) {
+      return fromMessage;
+    }
+    const fromErrorField = err && err.error ? String(err.error).trim() : '';
+    if (fromErrorField) {
+      return fromErrorField;
+    }
+    return fallback || 'unknown';
+  }
+
+  function gmDownloadByUrl(downloadUrl, filename, options) {
+    const opts = options || {};
+    const gmDownloadFn = opts.gmDownloadFn || (typeof GM_download === 'function' ? GM_download : null);
+    if (typeof gmDownloadFn !== 'function') {
+      return Promise.reject(new Error('gm-download-unavailable'));
+    }
+
+    const timeoutMs = Number(opts.timeoutMs);
+    const boundedTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 12000;
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(new Error('gm-download-timeout'));
+      }, boundedTimeout);
+
+      function done(fn, value) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      }
+
+      try {
+        const requestResult = gmDownloadFn({
+          url: downloadUrl,
+          name: filename,
+          saveAs: true,
+          onload: function () {
+            done(resolve);
+          },
+          onerror: function (err) {
+            done(reject, new Error(normalizeErrorMessage(err, 'gm-download-error')));
+          },
+          ontimeout: function () {
+            done(reject, new Error('gm-download-timeout'));
+          }
+        });
+
+        if (requestResult && typeof requestResult.then === 'function') {
+          requestResult.then(
+            function () {
+              done(resolve);
+            },
+            function (err) {
+              done(reject, new Error(normalizeErrorMessage(err, 'gm-download-error')));
+            }
+          );
+        }
+      } catch (err) {
+        done(reject, new Error(normalizeErrorMessage(err, 'gm-download-throw')));
+      }
+    });
+  }
+
+  function anchorDownloadByUrl(downloadUrl, filename) {
+    if (typeof document === 'undefined' || !document.body) {
+      return Promise.reject(new Error('anchor-download-unavailable'));
+    }
+
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return Promise.resolve();
+  }
+
+  async function triggerZipDownloadByUrl(downloadUrl, filename, deps) {
+    const options = deps || {};
+    const gmDownloader = typeof options.gmDownloadByUrl === 'function' ? options.gmDownloadByUrl : null;
+    const anchorDownloader = typeof options.anchorDownloadByUrl === 'function'
+      ? options.anchorDownloadByUrl
+      : anchorDownloadByUrl;
+
+    if (gmDownloader) {
+      try {
+        await gmDownloader(downloadUrl, filename);
+        return {
+          method: 'gm_download',
+          usedFallback: false,
+          errorMessage: ''
+        };
+      } catch (err) {
+        await anchorDownloader(downloadUrl, filename);
+        return {
+          method: 'anchor',
+          usedFallback: true,
+          errorMessage: normalizeErrorMessage(err, 'gm-download-error')
+        };
+      }
+    }
+
+    await anchorDownloader(downloadUrl, filename);
+    return {
+      method: 'anchor',
+      usedFallback: false,
+      errorMessage: ''
+    };
+  }
+
   function formatBytes(bytes) {
     const value = Number(bytes) || 0;
     if (value >= 1024 * 1024) {
@@ -760,6 +881,11 @@
       '#docs-md-progress-fill{height:100%;width:0;background:linear-gradient(90deg,hsl(var(--primary)) 0%,hsl(var(--primary) / .72) 100%);transition:width .22s ease}',
       '#docs-md-progress-text{font-size:12px;color:hsl(var(--foreground))}',
       '#docs-md-usage{font-size:11px;color:hsl(var(--muted-foreground));line-height:1.5;word-break:break-word}',
+      '#docs-md-download-wrap{display:none;justify-content:flex-end}',
+      '#docs-md-download-wrap.active{display:flex}',
+      '#docs-md-download-link{display:inline-flex;align-items:center;justify-content:center;min-height:30px;padding:0 12px;border-radius:10px;border:1px solid hsl(var(--border));background:hsl(var(--background));color:hsl(var(--foreground));font-size:12px;font-weight:700;text-decoration:none;cursor:pointer;transition:background .16s ease,border-color .16s ease}',
+      '#docs-md-download-link:hover{background:hsl(var(--secondary));border-color:hsl(var(--input))}',
+      '#docs-md-download-link:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px}',
       '.docs-md-fail-link{appearance:none;border:0;background:transparent;padding:0;font:inherit;color:hsl(var(--destructive));text-decoration-line:underline;text-decoration-style:dashed;text-decoration-thickness:1px;text-underline-offset:2px;cursor:pointer}',
       '.docs-md-fail-link:hover{color:hsl(var(--destructive) / .86)}',
       '.docs-md-fail-link:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px;border-radius:3px}',
@@ -825,6 +951,7 @@
       '    <div id="docs-md-progress-bar"><div id="docs-md-progress-fill"></div></div>',
       '    <div id="docs-md-progress-text">导出进度: 0/0 (0%)</div>',
       '    <div id="docs-md-usage"></div>',
+      '    <div id="docs-md-download-wrap"><a id="docs-md-download-link" href="#" download>手动下载 ZIP</a></div>',
       '  </div>',
       '  <label id="docs-md-check-all-wrap" class="docs-md-check-row docs-md-hidden"><input id="docs-md-check-all" type="checkbox" class="docs-md-square-check docs-md-group-check" checked>全选</label>',
       '  <div id="docs-md-tree" class="docs-md-surface docs-md-hidden"></div>',
@@ -850,6 +977,7 @@
       formatFailureReason,
       normalizeBinaryPayload,
       generateZipBlobWithFallback,
+      triggerZipDownloadByUrl,
       normalizeRootPath,
       sanitizeSegment,
       relativePath,
@@ -877,6 +1005,7 @@
     failedSeq: 0,
     scanSuccessTimer: 0,
     exportSuccessTimer: 0,
+    downloadObjectUrl: '',
     elements: {},
     scanSession: 0
   };
@@ -923,6 +1052,8 @@
       progressFill: panel.querySelector('#docs-md-progress-fill'),
       progressText: panel.querySelector('#docs-md-progress-text'),
       usageText: panel.querySelector('#docs-md-usage'),
+      downloadWrap: panel.querySelector('#docs-md-download-wrap'),
+      downloadLink: panel.querySelector('#docs-md-download-link'),
       tree: panel.querySelector('#docs-md-tree'),
       checkAllWrap: panel.querySelector('#docs-md-check-all-wrap'),
       checkAll: panel.querySelector('#docs-md-check-all')
@@ -1371,6 +1502,55 @@
     state.elements.usageText.innerHTML = buildUsageStatsMarkup(stats);
   }
 
+  function setDownloadLinkVisible(visible) {
+    if (!state.elements.downloadWrap) {
+      return;
+    }
+    if (visible) {
+      state.elements.downloadWrap.classList.add('active');
+    } else {
+      state.elements.downloadWrap.classList.remove('active');
+    }
+  }
+
+  function releaseDownloadObjectUrl() {
+    if (!state.downloadObjectUrl) {
+      return;
+    }
+    try {
+      URL.revokeObjectURL(state.downloadObjectUrl);
+    } catch (_) {
+      // ignore object URL release failures
+    }
+    state.downloadObjectUrl = '';
+  }
+
+  function resetDownloadLink() {
+    releaseDownloadObjectUrl();
+    if (state.elements.downloadLink) {
+      state.elements.downloadLink.removeAttribute('href');
+      state.elements.downloadLink.removeAttribute('download');
+      state.elements.downloadLink.textContent = '手动下载 ZIP';
+    }
+    setDownloadLinkVisible(false);
+  }
+
+  function prepareDownloadLink(blob, filename) {
+    if (!isBlobValue(blob)) {
+      throw new Error('invalid-zip-blob');
+    }
+    releaseDownloadObjectUrl();
+    const objectUrl = URL.createObjectURL(blob);
+    state.downloadObjectUrl = objectUrl;
+    if (state.elements.downloadLink) {
+      state.elements.downloadLink.href = objectUrl;
+      state.elements.downloadLink.download = filename;
+      state.elements.downloadLink.textContent = '手动下载 ZIP';
+    }
+    setDownloadLinkVisible(true);
+    return objectUrl;
+  }
+
   function resetExportProgress() {
     setExportProgressVisible(false);
     if (state.elements.progressFill) {
@@ -1382,6 +1562,7 @@
     if (state.elements.usageText) {
       state.elements.usageText.textContent = '';
     }
+    resetDownloadLink();
   }
 
   function updateProgress(extra) {
@@ -2119,15 +2300,26 @@
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const filename = 'docs-md-export-' + stamp + '.zip';
 
-      const a = document.createElement('a');
-      const objUrl = URL.createObjectURL(blob);
-      a.href = objUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(objUrl), 8000);
-      updateProgress('导出完成: ' + state.doneCount + ' 页');
+      const downloadUrl = prepareDownloadLink(blob, filename);
+      let autoDownloadResult = null;
+      try {
+        autoDownloadResult = await triggerZipDownloadByUrl(downloadUrl, filename, {
+          gmDownloadByUrl: typeof GM_download === 'function'
+            ? (url, name) => gmDownloadByUrl(url, name, {
+              gmDownloadFn: GM_download,
+              timeoutMs: 12000
+            })
+            : null,
+          anchorDownloadByUrl
+        });
+      } catch (err) {
+        setStatus('ZIP 已生成，自动下载失败：' + normalizeErrorMessage(err, 'unknown') + '。请点击“手动下载 ZIP”');
+      }
+
+      const methodSuffix = autoDownloadResult
+        ? (autoDownloadResult.usedFallback ? '（自动回退浏览器下载）' : (autoDownloadResult.method === 'gm_download' ? '（Tampermonkey 下载）' : '（浏览器下载）'))
+        : '（需手动下载）';
+      updateProgress('导出完成: ' + state.doneCount + ' 页 ' + methodSuffix + '，若未弹出下载请点击“手动下载 ZIP”');
       exportSucceeded = true;
     } catch (err) {
       setStatus('导出失败: ' + (err && err.message ? err.message : 'unknown'));
