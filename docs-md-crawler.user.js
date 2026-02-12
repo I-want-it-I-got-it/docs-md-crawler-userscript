@@ -33,6 +33,8 @@
     retries: 2,
     imageMode: 'local'
   };
+  const EXPORT_BUTTON_IDLE_TEXT = '导出 ZIP';
+  const EXPORT_STAGE_SEQUENCE = ['页面抓取', 'Markdown转换', '图片下载', 'ZIP打包'];
 
   function normalizeRootPath(raw) {
     let root = String(raw || '/').trim();
@@ -245,7 +247,7 @@
     }
 
     const entries = [];
-    function walk(node, depth) {
+    function walk(node, depth, ancestors) {
       node.pages
         .slice()
         .sort((a, b) => a.url.localeCompare(b.url))
@@ -254,7 +256,8 @@
             type: 'page',
             url: page.url,
             title: page.title,
-            depth
+            depth,
+            ancestors: ancestors.slice()
           });
         });
 
@@ -262,17 +265,19 @@
         .sort((a, b) => a.localeCompare(b))
         .forEach((segment) => {
           const groupNode = node.groups.get(segment);
+          const groupKey = ancestors.length ? ancestors[ancestors.length - 1] + '/' + segment : segment;
           entries.push({
             type: 'group',
-            key: segment + ':' + depth,
+            key: groupKey,
             title: sanitizeSegment(decodeURIComponent(segment), 'index'),
-            depth
+            depth,
+            ancestors: ancestors.slice()
           });
-          walk(groupNode, depth + 1);
+          walk(groupNode, depth + 1, ancestors.concat(groupKey));
         });
     }
 
-    walk(root, 0);
+    walk(root, 0, []);
     return entries;
   }
 
@@ -477,6 +482,20 @@
       '.docs-md-btn-outline:hover{background:hsl(var(--secondary));color:hsl(var(--secondary-foreground))}',
       '.docs-md-btn-destructive{background:hsl(var(--destructive));color:hsl(var(--destructive-foreground))}',
       '.docs-md-btn-destructive:hover{background:hsl(var(--destructive) / .9)}',
+      '.docs-md-btn-scan{position:relative;z-index:0}',
+      '.docs-md-btn-scan::before{content:"";position:absolute;inset:-1.5px;border-radius:inherit;padding:1.5px;background:conic-gradient(from 0deg,transparent 0deg,transparent 286deg,hsla(190,95%,68%,.95) 326deg,hsla(190,95%,68%,.95) 344deg,transparent 360deg);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:0;pointer-events:none;transform:rotate(0deg)}',
+      '.docs-md-btn-scan.is-scanning::before{opacity:1;animation:docs-md-scan-snake 1.1s linear infinite}',
+      '.docs-md-btn-scan.is-scanning{box-shadow:0 0 0 1px hsla(190,95%,68%,.35),0 0 18px -8px hsla(190,95%,68%,.95)}',
+      '@keyframes docs-md-scan-snake{to{transform:rotate(360deg)}}',
+      '.docs-md-btn-export{position:relative;overflow:hidden;isolation:isolate}',
+      '.docs-md-btn-export::before{content:"";position:absolute;inset:-1.5px;border-radius:inherit;padding:1.5px;background:conic-gradient(from 180deg,transparent 0deg,transparent 300deg,hsla(198,98%,72%,.95) 330deg,hsla(198,98%,72%,.95) 346deg,transparent 360deg);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:0;pointer-events:none}',
+      '.docs-md-btn-export::after{content:attr(data-progress);position:absolute;top:-8px;right:-4px;padding:1px 6px;border-radius:999px;background:hsl(var(--background));border:1px solid hsl(var(--border));font-size:10px;line-height:1.45;font-weight:700;color:hsl(var(--muted-foreground));opacity:0;transform:translateY(-2px);transition:opacity .2s ease,transform .2s ease;pointer-events:none}',
+      '.docs-md-btn-label{display:inline-block}',
+      '.docs-md-btn-export.is-exporting::before{opacity:1;animation:docs-md-export-ring 1.6s linear infinite}',
+      '.docs-md-btn-export.is-exporting::after{opacity:1;transform:translateY(0)}',
+      '.docs-md-btn-export.is-exporting .docs-md-btn-label{background:linear-gradient(90deg,hsla(210,40%,98%,.25) 0%,hsla(198,98%,76%,1) 40%,hsla(210,40%,98%,.25) 70%,hsla(210,40%,98%,.25) 100%);background-size:220% 100%;background-position:0 50%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:docs-md-export-wave 1.1s ease-in-out infinite}',
+      '@keyframes docs-md-export-ring{to{transform:rotate(360deg)}}',
+      '@keyframes docs-md-export-wave{0%{background-position:0 50%;transform:translateY(0)}50%{background-position:100% 50%;transform:translateY(-1px)}100%{background-position:220% 50%;transform:translateY(0)}}',
       '.docs-md-surface{border:1px solid hsl(var(--border));border-radius:var(--radius);background:hsl(var(--background));padding:10px}',
       '#docs-md-status{display:flex;gap:8px;align-items:flex-start;justify-content:space-between}',
       '#docs-md-status-text{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11px;line-height:1.45;flex:1;min-width:0;color:hsl(var(--foreground))}',
@@ -493,11 +512,19 @@
       '#docs-md-tree{max-height:260px;overflow:auto;padding:6px 10px}',
       '.docs-md-item{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px dashed hsl(var(--border))}',
       '.docs-md-item:last-child{border-bottom:0}',
-      '.docs-md-item>input[type="checkbox"]{margin-top:2px;accent-color:hsl(var(--primary));flex-shrink:0}',
+      '.docs-md-group-row{padding:8px 0}',
+      '.docs-md-tree-toggle{display:flex;align-items:center;gap:8px;border:0;background:transparent;padding:0;cursor:pointer;color:inherit;font:inherit}',
+      '.docs-md-toggle-caret{display:inline-flex;align-items:center;justify-content:center;width:14px;min-width:14px;color:hsl(var(--muted-foreground));font-size:12px}',
+      '.docs-md-circle-check{appearance:none;-webkit-appearance:none;margin-top:2px;width:16px;height:16px;border-radius:999px;border:1.6px solid hsl(var(--border));background:hsl(var(--background));display:inline-grid;place-items:center;cursor:pointer;transition:border-color .15s ease,box-shadow .15s ease;flex-shrink:0}',
+      '.docs-md-circle-check::before{content:"";width:8px;height:8px;border-radius:999px;background:hsl(var(--primary));transform:scale(0);transition:transform .12s ease}',
+      '.docs-md-circle-check:checked{border-color:hsl(var(--primary));box-shadow:0 0 0 2px hsla(var(--primary),.18)}',
+      '.docs-md-circle-check:checked::before{transform:scale(1)}',
+      '.docs-md-circle-check:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:1px}',
       '.docs-md-item-content{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}',
       '.docs-md-item-title{font-weight:600;word-break:break-word;color:hsl(var(--foreground))}',
       '.docs-md-item-group{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;background:hsl(var(--secondary));border:1px solid hsl(var(--border));font-size:11px;font-weight:700;color:hsl(var(--secondary-foreground))}',
       '.docs-md-retry{min-height:28px;padding:0 10px}',
+      '.docs-md-hidden{display:none !important}',
       '.docs-md-check-row{display:flex;align-items:center;gap:7px;font-size:12px;color:hsl(var(--muted-foreground));padding:0 2px}',
       '.docs-md-check-row input{accent-color:hsl(var(--primary))}',
       '@media (max-width:640px){#docs-md-fab{right:12px;bottom:12px}#docs-md-panel{right:12px;left:12px;width:auto;max-height:80vh}#docs-md-actions{grid-template-columns:1fr}}'
@@ -509,7 +536,6 @@
       '<div id="docs-md-head">',
       '  <div class="docs-md-head-main">',
       '    <span class="docs-md-head-title">Docs Markdown Crawler</span>',
-      '    <span class="docs-md-head-subtitle">shadcn-inspired UI</span>',
       '  </div>',
       '  <button id="docs-md-close" type="button" aria-label="关闭面板">×</button>',
       '</div>',
@@ -522,8 +548,8 @@
       '    </select>',
       '  </div>',
       '  <div id="docs-md-actions">',
-      '    <button id="docs-md-scan" type="button" class="docs-md-btn docs-md-btn-primary">扫描目录</button>',
-      '    <button id="docs-md-export" type="button" class="docs-md-btn docs-md-btn-secondary">导出 ZIP</button>',
+      '    <button id="docs-md-scan" type="button" class="docs-md-btn docs-md-btn-primary docs-md-btn-scan">扫描目录</button>',
+      '    <button id="docs-md-export" type="button" class="docs-md-btn docs-md-btn-secondary docs-md-btn-export" data-progress="0%"><span class="docs-md-btn-label">导出 ZIP</span></button>',
       '    <button id="docs-md-stop" type="button" class="docs-md-btn docs-md-btn-destructive">停止</button>',
       '  </div>',
       '  <div id="docs-md-status" class="docs-md-surface">',
@@ -536,7 +562,7 @@
       '    <div id="docs-md-progress-text">导出进度: 0/0 (0%)</div>',
       '    <div id="docs-md-usage"></div>',
       '  </div>',
-      '  <label class="docs-md-check-row"><input id="docs-md-check-all" type="checkbox" checked>全选</label>',
+      '  <label id="docs-md-check-all-wrap" class="docs-md-check-row docs-md-hidden"><input id="docs-md-check-all" type="checkbox" checked>全选</label>',
       '  <div id="docs-md-tree" class="docs-md-surface"></div>',
       '</div>'
     ].join('');
@@ -567,6 +593,8 @@
     exporting: false,
     stopRequested: false,
     discoveredUrls: [],
+    selectedUrls: new Set(),
+    collapsedGroups: new Set(),
     failed: [],
     foundCount: 0,
     doneCount: 0,
@@ -622,8 +650,10 @@
       progressText: panel.querySelector('#docs-md-progress-text'),
       usageText: panel.querySelector('#docs-md-usage'),
       tree: panel.querySelector('#docs-md-tree'),
+      checkAllWrap: panel.querySelector('#docs-md-check-all-wrap'),
       checkAll: panel.querySelector('#docs-md-check-all')
     };
+    state.elements.exportBtnLabel = state.elements.exportBtn.querySelector('.docs-md-btn-label');
 
     state.elements.fab.addEventListener('click', () => {
       panel.classList.toggle('open');
@@ -642,9 +672,12 @@
 
     state.elements.checkAll.addEventListener('change', () => {
       const checked = state.elements.checkAll.checked;
-      getPageCheckboxes().forEach((el) => {
-        el.checked = checked;
-      });
+      if (checked) {
+        state.selectedUrls = new Set(state.discoveredUrls.map((item) => item.url));
+      } else {
+        state.selectedUrls.clear();
+      }
+      renderTree(state.discoveredUrls);
       syncSelectAllState();
     });
 
@@ -660,6 +693,8 @@
 
     updateFailToggle();
     renderFailedQueue();
+    setSelectAllVisible(false);
+    setExportButtonBusy(false);
   }
 
   function setStatus(text) {
@@ -806,6 +841,7 @@
               url: normalized,
               title: getDisplayTitle(normalized, title)
             });
+            state.selectedUrls.add(normalized);
             state.discoveredUrls.sort((a, b) => a.url.localeCompare(b.url));
             renderTree(state.discoveredUrls);
           }
@@ -828,16 +864,19 @@
     }
   }
 
-  function getPageCheckboxes() {
-    return Array.from(state.elements.tree.querySelectorAll('input[type="checkbox"][data-url]'));
-  }
-
   function syncSelectAllState() {
-    const total = getPageCheckboxes().length;
-    const selected = getPageCheckboxes().filter((cb) => cb.checked).length;
+    const total = state.discoveredUrls.length;
+    const selected = state.selectedUrls.size;
     const status = computeSelectAllState(total, selected);
     state.elements.checkAll.checked = status.checked;
     state.elements.checkAll.indeterminate = status.indeterminate;
+  }
+
+  function setSelectAllVisible(visible) {
+    if (!state.elements.checkAllWrap) {
+      return;
+    }
+    state.elements.checkAllWrap.classList.toggle('docs-md-hidden', !visible);
   }
 
   function setExportProgressVisible(visible) {
@@ -855,6 +894,57 @@
     const progress = computeStageProgress(completed, total);
     state.elements.progressFill.style.width = progress.percent + '%';
     state.elements.progressText.textContent = stageLabel + ': ' + progress.completed + '/' + progress.total + ' (' + progress.percent + '%)';
+  }
+
+  function setScanButtonBusy(scanning) {
+    if (!state.elements.scanBtn) {
+      return;
+    }
+    state.elements.scanBtn.classList.toggle('is-scanning', Boolean(scanning));
+    state.elements.scanBtn.setAttribute('aria-busy', scanning ? 'true' : 'false');
+  }
+
+  function setExportButtonProgress(percent) {
+    if (!state.elements.exportBtn) {
+      return;
+    }
+    const bounded = Math.min(100, Math.max(0, Math.round(Number(percent) || 0)));
+    const progressText = bounded + '%';
+    state.elements.exportBtn.dataset.progress = progressText;
+    if (state.elements.exportBtnLabel) {
+      state.elements.exportBtnLabel.textContent = '已导出' + progressText;
+    } else {
+      state.elements.exportBtn.textContent = '已导出' + progressText;
+    }
+  }
+
+  function setExportButtonBusy(exporting) {
+    if (!state.elements.exportBtn) {
+      return;
+    }
+    const busy = Boolean(exporting);
+    state.elements.exportBtn.classList.toggle('is-exporting', busy);
+    state.elements.exportBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
+    state.elements.exportBtn.disabled = busy;
+    if (busy) {
+      setExportButtonProgress(0);
+      return;
+    }
+    state.elements.exportBtn.dataset.progress = '0%';
+    if (state.elements.exportBtnLabel) {
+      state.elements.exportBtnLabel.textContent = EXPORT_BUTTON_IDLE_TEXT;
+    } else {
+      state.elements.exportBtn.textContent = EXPORT_BUTTON_IDLE_TEXT;
+    }
+  }
+
+  function computeOverallExportPercent(stageLabel, completed, total) {
+    const stagePercent = computeStageProgress(completed, total).percent;
+    const stageIndex = EXPORT_STAGE_SEQUENCE.indexOf(stageLabel);
+    if (stageIndex < 0) {
+      return stagePercent;
+    }
+    return Math.round(((stageIndex + stagePercent / 100) / EXPORT_STAGE_SEQUENCE.length) * 100);
   }
 
   function updateUsageText(stats) {
@@ -888,28 +978,64 @@
     tree.innerHTML = '';
 
     if (!items.length) {
+      setSelectAllVisible(false);
       tree.textContent = '未发现文档链接';
       return;
     }
+    setSelectAllVisible(true);
 
     const treeItems = buildTreeItems(items, state.scanStartUrl || normalizeUrl(location.href) || location.href);
     const frag = document.createDocumentFragment();
     for (const item of treeItems) {
+      if ((item.ancestors || []).some((key) => state.collapsedGroups.has(key))) {
+        continue;
+      }
       const row = document.createElement('div');
       row.className = 'docs-md-item';
       row.style.paddingLeft = (item.depth * 14) + 'px';
 
       if (item.type === 'group') {
+        row.classList.add('docs-md-group-row');
+        const expanded = !state.collapsedGroups.has(item.key);
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'docs-md-tree-toggle';
+        toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+
+        const caret = document.createElement('span');
+        caret.className = 'docs-md-toggle-caret';
+        caret.textContent = expanded ? '▾' : '▸';
+
         const group = document.createElement('span');
         group.className = 'docs-md-item-group';
         group.textContent = item.title;
-        row.appendChild(group);
+
+        toggle.appendChild(caret);
+        toggle.appendChild(group);
+        toggle.addEventListener('click', () => {
+          if (state.collapsedGroups.has(item.key)) {
+            state.collapsedGroups.delete(item.key);
+          } else {
+            state.collapsedGroups.add(item.key);
+          }
+          renderTree(state.discoveredUrls);
+        });
+
+        row.appendChild(toggle);
       } else {
         const cb = document.createElement('input');
         cb.type = 'checkbox';
-        cb.checked = true;
+        cb.className = 'docs-md-circle-check';
+        cb.checked = state.selectedUrls.has(item.url);
         cb.dataset.url = item.url;
-        cb.addEventListener('change', syncSelectAllState);
+        cb.addEventListener('change', () => {
+          if (cb.checked) {
+            state.selectedUrls.add(item.url);
+          } else {
+            state.selectedUrls.delete(item.url);
+          }
+          syncSelectAllState();
+        });
 
         const content = document.createElement('span');
         content.className = 'docs-md-item-content';
@@ -1125,7 +1251,7 @@
       }
 
       state.currentUrl = current;
-      updateProgress('扫描中');
+      updateProgress();
 
       let html;
       try {
@@ -1159,13 +1285,12 @@
   }
 
   function selectedUrlsFromTree() {
-    const selected = [];
-    state.elements.tree.querySelectorAll('input[type="checkbox"][data-url]').forEach((cb) => {
-      if (cb.checked) {
-        selected.push(cb.dataset.url);
-      }
-    });
-    return selected;
+    if (!state.selectedUrls.size) {
+      return [];
+    }
+    return state.discoveredUrls
+      .map((item) => item.url)
+      .filter((url) => state.selectedUrls.has(url));
   }
 
   function rewriteLinksAndImages(node, pageUrl, pageFile, urlToFilePath, imageMode, imageRegistry) {
@@ -1237,6 +1362,13 @@
 
     state.scanning = true;
     state.stopRequested = false;
+    setScanButtonBusy(true);
+    setSelectAllVisible(false);
+    state.selectedUrls = new Set();
+    state.collapsedGroups.clear();
+    if (state.elements.tree) {
+      state.elements.tree.textContent = '扫描进行中，完成后显示文章目录';
+    }
     state.scanSession += 1;
     const mySession = state.scanSession;
     state.discoveredUrls = [];
@@ -1266,6 +1398,8 @@
       }
 
       state.discoveredUrls = urls;
+      state.selectedUrls = new Set(urls.map((item) => item.url));
+      state.collapsedGroups.clear();
       renderTree(urls);
       state.queueCount = 0;
       state.currentUrl = '';
@@ -1280,6 +1414,7 @@
     } finally {
       state.scanning = false;
       state.stopRequested = false;
+      setScanButtonBusy(false);
     }
   }
 
@@ -1341,6 +1476,7 @@
 
     state.exporting = true;
     state.stopRequested = false;
+    setExportButtonBusy(true);
     state.doneCount = 0;
     state.failCount = state.failed.length;
     updateFailToggle();
@@ -1363,7 +1499,12 @@
       updateUsageText(exportStats);
     }
 
+    let maxExportPercent = 0;
+
     function updateExportStage(stageLabel, completed, total) {
+      const overallPercent = computeOverallExportPercent(stageLabel, completed, total);
+      maxExportPercent = Math.max(maxExportPercent, overallPercent);
+      setExportButtonProgress(maxExportPercent);
       setExportProgressVisible(true);
       setExportProgress(stageLabel, completed, total);
       refreshUsage();
@@ -1529,6 +1670,7 @@
       state.currentUrl = '';
       state.exporting = false;
       state.stopRequested = false;
+      setExportButtonBusy(false);
     }
   }
 

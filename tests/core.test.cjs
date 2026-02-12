@@ -92,6 +92,18 @@ test('buildTreeItems creates grouped hierarchical entries', () => {
   );
 });
 
+test('buildTreeItems exposes stable group keys and page ancestors for toggle tree', () => {
+  const pages = [
+    { url: 'https://example.com/docs/start', title: 'Start' },
+    { url: 'https://example.com/docs/start/a/nested/two', title: 'Two' }
+  ];
+  const entries = crawler.buildTreeItems(pages, 'https://example.com/docs/start');
+  const nestedGroup = entries.find((item) => item.type === 'group' && item.title === 'nested');
+  const nestedPage = entries.find((item) => item.type === 'page' && item.title === 'Two');
+  assert.equal(nestedGroup.key, 'a/nested');
+  assert.deepEqual(nestedPage.ancestors, ['a', 'a/nested']);
+});
+
 test('computeSelectAllState returns checked and indeterminate correctly', () => {
   assert.deepEqual(crawler.computeSelectAllState(0, 0), { checked: false, indeterminate: false });
   assert.deepEqual(crawler.computeSelectAllState(5, 0), { checked: false, indeterminate: false });
@@ -189,5 +201,32 @@ test('buildPanelMarkup keeps required ids and shadcn-style structure', () => {
   assert.match(html, /id="docs-md-tree"/);
   assert.match(html, /docs-md-btn docs-md-btn-primary/);
   assert.match(html, /docs-md-btn docs-md-btn-outline/);
+  assert.match(html, /docs-md-btn-export/);
   assert.match(html, /docs-md-surface/);
+  assert.match(html, /id="docs-md-check-all-wrap"/);
+  assert.match(html, /docs-md-check-row docs-md-hidden/);
+});
+
+test('buildPanelMarkup removes shadcn-inspired subtitle text', () => {
+  const html = crawler.buildPanelMarkup();
+  assert.doesNotMatch(html, /shadcn-inspired UI/);
+});
+
+test('buildUiStyles includes snake-like scan button edge animation hooks', () => {
+  const css = crawler.buildUiStyles();
+  assert.match(css, /\.docs-md-btn-scan/);
+  assert.match(css, /\.docs-md-btn-scan\.is-scanning::before/);
+  assert.match(css, /@keyframes docs-md-scan-snake/);
+});
+
+test('buildUiStyles includes export button water-wave and edge percent hooks', () => {
+  const css = crawler.buildUiStyles();
+  assert.match(css, /\.docs-md-btn-export/);
+  assert.match(css, /\.docs-md-btn-export\.is-exporting::before/);
+  assert.match(css, /\.docs-md-btn-export\.is-exporting::after/);
+  assert.match(css, /\.docs-md-btn-export\.is-exporting \.docs-md-btn-label/);
+  assert.match(css, /\.docs-md-tree-toggle/);
+  assert.match(css, /\.docs-md-circle-check/);
+  assert.match(css, /@keyframes docs-md-export-wave/);
+  assert.match(css, /\.docs-md-hidden\{display:none/);
 });
