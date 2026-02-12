@@ -166,3 +166,28 @@ test('buildFailedQueueItems renders title-only entries with fallback title', () 
     ]
   );
 });
+
+test('buildUiStyles provides shadcn-style tokens and button variants', () => {
+  const css = crawler.buildUiStyles();
+  assert.match(css, /--background:/);
+  assert.match(css, /--foreground:/);
+  assert.match(css, /--card:/);
+  assert.match(css, /\.docs-md-btn\{/);
+  assert.match(css, /\.docs-md-btn-primary\{/);
+  assert.match(css, /\.docs-md-btn-outline\{/);
+  assert.match(css, /\.docs-md-surface\{/);
+});
+
+test('buildPanelMarkup keeps required ids and shadcn-style structure', () => {
+  const html = crawler.buildPanelMarkup();
+  assert.match(html, /id="docs-md-head"/);
+  assert.match(html, /id="docs-md-image-mode"/);
+  assert.match(html, /id="docs-md-scan"/);
+  assert.match(html, /id="docs-md-export"/);
+  assert.match(html, /id="docs-md-stop"/);
+  assert.match(html, /id="docs-md-status-text"/);
+  assert.match(html, /id="docs-md-tree"/);
+  assert.match(html, /docs-md-btn docs-md-btn-primary/);
+  assert.match(html, /docs-md-btn docs-md-btn-outline/);
+  assert.match(html, /docs-md-surface/);
+});

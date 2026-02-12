@@ -443,6 +443,105 @@
     return service;
   }
 
+  function buildUiStyles() {
+    return [
+      '#docs-md-fab,#docs-md-panel{--background:0 0% 100%;--foreground:222.2 84% 4.9%;--card:0 0% 100%;--card-foreground:222.2 84% 4.9%;--muted:210 40% 96.1%;--muted-foreground:215.4 16.3% 46.9%;--border:214.3 31.8% 91.4%;--input:214.3 31.8% 91.4%;--primary:222.2 47.4% 11.2%;--primary-foreground:210 40% 98%;--secondary:210 40% 96.1%;--secondary-foreground:222.2 47.4% 11.2%;--destructive:0 72.2% 50.6%;--destructive-foreground:210 40% 98%;--radius:12px;--ring:215 20.2% 65.1%}',
+      '#docs-md-fab,#docs-md-panel,#docs-md-panel *{box-sizing:border-box}',
+      '#docs-md-fab{position:fixed;right:20px;bottom:18px;z-index:2147483644;padding:10px 16px;border:1px solid hsl(var(--border));border-radius:999px;background:hsl(var(--background));color:hsl(var(--foreground));font:600 13px/1.2 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:0 10px 24px -12px rgba(15,23,42,.45);transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}',
+      '#docs-md-fab:hover{transform:translateY(-1px);box-shadow:0 14px 30px -14px rgba(15,23,42,.5)}',
+      '#docs-md-fab:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px}',
+      '#docs-md-panel{position:fixed;right:18px;bottom:68px;width:min(420px,calc(100vw - 24px));max-height:78vh;background:linear-gradient(160deg,hsl(var(--card)) 0%,hsl(var(--muted)) 100%);border:1px solid hsl(var(--border));border-radius:calc(var(--radius) + 4px);box-shadow:0 24px 55px -30px rgba(15,23,42,.55);z-index:2147483644;display:none;overflow:hidden;color:hsl(var(--card-foreground));font:13px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}',
+      '#docs-md-panel.open{display:flex;flex-direction:column}',
+      '#docs-md-head{padding:14px 16px 12px;border-bottom:1px solid hsl(var(--border));display:flex;justify-content:space-between;align-items:flex-start;gap:10px;background:hsla(var(--background),.88);backdrop-filter:blur(4px)}',
+      '.docs-md-head-main{display:flex;flex-direction:column;gap:4px;min-width:0}',
+      '.docs-md-head-title{font-size:15px;font-weight:700;letter-spacing:.01em}',
+      '.docs-md-head-subtitle{font-size:11px;color:hsl(var(--muted-foreground));font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}',
+      '#docs-md-close{border:1px solid hsl(var(--border));background:hsl(var(--background));border-radius:8px;height:28px;width:28px;display:inline-flex;align-items:center;justify-content:center;font-size:18px;line-height:1;cursor:pointer;color:hsl(var(--muted-foreground));transition:background .2s ease,border-color .2s ease,color .2s ease}',
+      '#docs-md-close:hover{background:hsl(var(--secondary));color:hsl(var(--secondary-foreground))}',
+      '#docs-md-close:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px}',
+      '#docs-md-body{padding:12px;display:flex;flex-direction:column;gap:10px;overflow:auto}',
+      '.docs-md-field{display:flex;flex-direction:column;gap:6px}',
+      '.docs-md-label{font-size:12px;color:hsl(var(--muted-foreground));font-weight:600}',
+      '#docs-md-image-mode{width:100%;min-height:36px;padding:8px 10px;border:1px solid hsl(var(--input));border-radius:var(--radius);background:hsl(var(--background));color:hsl(var(--foreground));font:500 13px/1.25 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;transition:border-color .2s ease,box-shadow .2s ease}',
+      '#docs-md-image-mode:focus-visible{outline:none;border-color:hsl(var(--ring));box-shadow:0 0 0 2px hsla(var(--ring),.25)}',
+      '#docs-md-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}',
+      '.docs-md-btn{min-height:34px;padding:0 10px;border-radius:10px;border:1px solid transparent;font-size:12px;font-weight:700;letter-spacing:.01em;cursor:pointer;transition:background .18s ease,color .18s ease,border-color .18s ease,transform .18s ease}',
+      '.docs-md-btn:hover{transform:translateY(-1px)}',
+      '.docs-md-btn:disabled{cursor:not-allowed;opacity:.55;transform:none}',
+      '.docs-md-btn:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:1px}',
+      '.docs-md-btn-primary{background:hsl(var(--primary));color:hsl(var(--primary-foreground))}',
+      '.docs-md-btn-primary:hover{background:hsl(var(--primary) / .9)}',
+      '.docs-md-btn-secondary{background:hsl(var(--secondary));color:hsl(var(--secondary-foreground));border-color:hsl(var(--border))}',
+      '.docs-md-btn-secondary:hover{background:hsl(var(--secondary) / .78)}',
+      '.docs-md-btn-outline{background:hsl(var(--background));color:hsl(var(--muted-foreground));border-color:hsl(var(--border))}',
+      '.docs-md-btn-outline:hover{background:hsl(var(--secondary));color:hsl(var(--secondary-foreground))}',
+      '.docs-md-btn-destructive{background:hsl(var(--destructive));color:hsl(var(--destructive-foreground))}',
+      '.docs-md-btn-destructive:hover{background:hsl(var(--destructive) / .9)}',
+      '.docs-md-surface{border:1px solid hsl(var(--border));border-radius:var(--radius);background:hsl(var(--background));padding:10px}',
+      '#docs-md-status{display:flex;gap:8px;align-items:flex-start;justify-content:space-between}',
+      '#docs-md-status-text{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:11px;line-height:1.45;flex:1;min-width:0;color:hsl(var(--foreground))}',
+      '#docs-md-fail-toggle{padding:0 10px;border-radius:999px;min-height:26px;white-space:nowrap}',
+      '#docs-md-fail-toggle.has-fail{border-color:hsl(var(--destructive));color:hsl(var(--destructive));background:hsl(var(--destructive) / .08)}',
+      '#docs-md-export-progress{display:none;gap:8px;flex-direction:column}',
+      '#docs-md-export-progress.active{display:flex}',
+      '#docs-md-progress-bar{width:100%;height:8px;background:hsl(var(--secondary));border-radius:999px;overflow:hidden}',
+      '#docs-md-progress-fill{height:100%;width:0;background:linear-gradient(90deg,hsl(var(--primary)) 0%,hsl(var(--primary) / .72) 100%);transition:width .22s ease}',
+      '#docs-md-progress-text{font-size:12px;color:hsl(var(--foreground))}',
+      '#docs-md-usage{font-size:11px;color:hsl(var(--muted-foreground));white-space:pre-wrap;line-height:1.5}',
+      '#docs-md-failed-wrap{display:none;padding:8px 10px}',
+      '#docs-md-failed-wrap.open{display:block}',
+      '#docs-md-tree{max-height:260px;overflow:auto;padding:6px 10px}',
+      '.docs-md-item{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px dashed hsl(var(--border))}',
+      '.docs-md-item:last-child{border-bottom:0}',
+      '.docs-md-item>input[type="checkbox"]{margin-top:2px;accent-color:hsl(var(--primary));flex-shrink:0}',
+      '.docs-md-item-content{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}',
+      '.docs-md-item-title{font-weight:600;word-break:break-word;color:hsl(var(--foreground))}',
+      '.docs-md-item-group{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;background:hsl(var(--secondary));border:1px solid hsl(var(--border));font-size:11px;font-weight:700;color:hsl(var(--secondary-foreground))}',
+      '.docs-md-retry{min-height:28px;padding:0 10px}',
+      '.docs-md-check-row{display:flex;align-items:center;gap:7px;font-size:12px;color:hsl(var(--muted-foreground));padding:0 2px}',
+      '.docs-md-check-row input{accent-color:hsl(var(--primary))}',
+      '@media (max-width:640px){#docs-md-fab{right:12px;bottom:12px}#docs-md-panel{right:12px;left:12px;width:auto;max-height:80vh}#docs-md-actions{grid-template-columns:1fr}}'
+    ].join('');
+  }
+
+  function buildPanelMarkup() {
+    return [
+      '<div id="docs-md-head">',
+      '  <div class="docs-md-head-main">',
+      '    <span class="docs-md-head-title">Docs Markdown Crawler</span>',
+      '    <span class="docs-md-head-subtitle">shadcn-inspired UI</span>',
+      '  </div>',
+      '  <button id="docs-md-close" type="button" aria-label="关闭面板">×</button>',
+      '</div>',
+      '<div id="docs-md-body">',
+      '  <div class="docs-md-field">',
+      '    <label class="docs-md-label" for="docs-md-image-mode">图片模式</label>',
+      '    <select id="docs-md-image-mode">',
+      '      <option value="local" selected>下载本地</option>',
+      '      <option value="external">保留外链</option>',
+      '    </select>',
+      '  </div>',
+      '  <div id="docs-md-actions">',
+      '    <button id="docs-md-scan" type="button" class="docs-md-btn docs-md-btn-primary">扫描目录</button>',
+      '    <button id="docs-md-export" type="button" class="docs-md-btn docs-md-btn-secondary">导出 ZIP</button>',
+      '    <button id="docs-md-stop" type="button" class="docs-md-btn docs-md-btn-destructive">停止</button>',
+      '  </div>',
+      '  <div id="docs-md-status" class="docs-md-surface">',
+      '    <div id="docs-md-status-text" aria-live="polite">等待手动扫描</div>',
+      '    <button id="docs-md-fail-toggle" type="button" class="docs-md-btn docs-md-btn-outline" disabled>失败: 0</button>',
+      '  </div>',
+      '  <div id="docs-md-failed-wrap" class="docs-md-surface"><div id="docs-md-failed-tree">暂无失败项</div></div>',
+      '  <div id="docs-md-export-progress" class="docs-md-surface">',
+      '    <div id="docs-md-progress-bar"><div id="docs-md-progress-fill"></div></div>',
+      '    <div id="docs-md-progress-text">导出进度: 0/0 (0%)</div>',
+      '    <div id="docs-md-usage"></div>',
+      '  </div>',
+      '  <label class="docs-md-check-row"><input id="docs-md-check-all" type="checkbox" checked>全选</label>',
+      '  <div id="docs-md-tree" class="docs-md-surface"></div>',
+      '</div>'
+    ].join('');
+  }
+
   if (env.isNode) {
     return {
       normalizeUrl,
@@ -457,7 +556,9 @@
       formatUsageStats,
       normalizeRootPath,
       sanitizeSegment,
-      relativePath
+      relativePath,
+      buildUiStyles,
+      buildPanelMarkup
     };
   }
 
@@ -479,41 +580,7 @@
   };
 
   function addStyles() {
-    const css = [
-      '#docs-md-fab{position:fixed;right:18px;bottom:18px;z-index:2147483644;padding:10px 14px;border:0;border-radius:999px;background:#13315c;color:#fff;font:600 13px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;cursor:pointer;box-shadow:0 6px 24px rgba(0,0,0,.25)}',
-      '#docs-md-panel{position:fixed;right:18px;bottom:70px;width:360px;max-height:78vh;background:#fff;border:1px solid #d4d7dd;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.25);z-index:2147483644;display:none;overflow:hidden;color:#1f2937;font:13px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif}',
-      '#docs-md-panel.open{display:flex;flex-direction:column}',
-      '#docs-md-head{padding:10px 12px;background:linear-gradient(130deg,#f6f9ff 0%,#e8f0ff 100%);border-bottom:1px solid #e3e7ee;display:flex;justify-content:space-between;align-items:center;font-weight:700}',
-      '#docs-md-body{padding:10px 12px;display:flex;flex-direction:column;gap:8px;overflow:auto}',
-      '#docs-md-body input,#docs-md-body select{width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #c9d0db;border-radius:8px;background:#fff}',
-      '#docs-md-actions{display:flex;gap:8px;flex-wrap:wrap}',
-      '#docs-md-actions button{border:0;border-radius:8px;padding:7px 10px;cursor:pointer;font-weight:600}',
-      '#docs-md-scan{background:#164e63;color:#fff}',
-      '#docs-md-export{background:#0a7f38;color:#fff}',
-      '#docs-md-stop{background:#8c2f39;color:#fff}',
-      '#docs-md-status{background:#f7f9fc;border:1px solid #dbe3ef;border-radius:8px;padding:8px;display:flex;gap:8px;align-items:flex-start;justify-content:space-between}',
-      '#docs-md-status-text{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;flex:1;min-width:0}',
-      '#docs-md-fail-toggle{border:1px solid #cbd5e1;border-radius:999px;background:#fff;padding:2px 8px;font-size:11px;line-height:1.5;color:#475569;cursor:pointer;white-space:nowrap}',
-      '#docs-md-fail-toggle.has-fail{color:#b91c1c;border-color:#fecaca;background:#fff1f2}',
-      '#docs-md-fail-toggle:disabled{cursor:not-allowed;opacity:.6}',
-      '#docs-md-export-progress{border:1px solid #dbe3ef;background:#f9fbff;border-radius:8px;padding:8px;display:none;gap:6px;flex-direction:column}',
-      '#docs-md-export-progress.active{display:flex}',
-      '#docs-md-progress-bar{width:100%;height:8px;background:#e5eaf3;border-radius:999px;overflow:hidden}',
-      '#docs-md-progress-fill{height:100%;width:0;background:#0a7f38;transition:width .2s ease}',
-      '#docs-md-progress-text{font-size:12px;color:#334155}',
-      '#docs-md-usage{font-size:11px;color:#64748b;white-space:pre-wrap}',
-      '#docs-md-tree{border:1px solid #dbe3ef;border-radius:8px;padding:8px;max-height:260px;overflow:auto;background:#fbfcff}',
-      '#docs-md-failed-wrap{border:1px solid #fecaca;border-radius:8px;padding:8px;max-height:180px;overflow:auto;background:#fff7f7;display:none}',
-      '#docs-md-failed-wrap.open{display:block}',
-      '.docs-md-item{display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-bottom:1px dashed #eef2f7}',
-      '.docs-md-item:last-child{border-bottom:0}',
-      '.docs-md-item-content{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}',
-      '.docs-md-item-title{font-weight:600;word-break:break-word}',
-      '.docs-md-item-group{font-weight:700;color:#0f172a}',
-      '.docs-md-retry{border:1px solid #d5dbe7;border-radius:6px;background:#fff;padding:2px 8px;font-size:12px;cursor:pointer;flex-shrink:0}',
-      '.docs-md-mini{font-size:12px;color:#4b5563}',
-      '#docs-md-close{background:transparent;border:0;font-size:18px;line-height:1;cursor:pointer;color:#1f2937}'
-    ].join('');
+    const css = buildUiStyles();
 
     if (typeof GM_addStyle === 'function') {
       GM_addStyle(css);
@@ -528,30 +595,11 @@
     const fab = document.createElement('button');
     fab.id = 'docs-md-fab';
     fab.type = 'button';
-    fab.textContent = '扫描文档';
+    fab.textContent = 'Docs MD';
 
     const panel = document.createElement('div');
     panel.id = 'docs-md-panel';
-    panel.innerHTML = [
-      '<div id="docs-md-head"><span>Docs Markdown Crawler</span><button id="docs-md-close" type="button">×</button></div>',
-      '<div id="docs-md-body">',
-      '  <div><label class="docs-md-mini">图片模式</label><select id="docs-md-image-mode"><option value="local" selected>下载本地</option><option value="external">保留外链</option></select></div>',
-      '  <div id="docs-md-actions">',
-      '    <button id="docs-md-scan" type="button">扫描目录</button>',
-      '    <button id="docs-md-export" type="button">导出 ZIP</button>',
-      '    <button id="docs-md-stop" type="button">停止</button>',
-      '  </div>',
-      '  <div id="docs-md-status"><div id="docs-md-status-text">等待手动扫描</div><button id="docs-md-fail-toggle" type="button" disabled>失败: 0</button></div>',
-      '  <div id="docs-md-failed-wrap"><div id="docs-md-failed-tree">暂无失败项</div></div>',
-      '  <div id="docs-md-export-progress">',
-      '    <div id="docs-md-progress-bar"><div id="docs-md-progress-fill"></div></div>',
-      '    <div id="docs-md-progress-text">导出进度: 0/0 (0%)</div>',
-      '    <div id="docs-md-usage"></div>',
-      '  </div>',
-      '  <label class="docs-md-mini"><input id="docs-md-check-all" type="checkbox" checked> 全选</label>',
-      '  <div id="docs-md-tree"></div>',
-      '</div>'
-    ].join('');
+    panel.innerHTML = buildPanelMarkup();
 
     document.body.appendChild(fab);
     document.body.appendChild(panel);
@@ -673,7 +721,7 @@
 
       const retryBtn = document.createElement('button');
       retryBtn.type = 'button';
-      retryBtn.className = 'docs-md-retry';
+      retryBtn.className = 'docs-md-btn docs-md-btn-outline docs-md-retry';
       retryBtn.textContent = '重试';
       retryBtn.addEventListener('click', () => {
         retryFailedItem(item.id, retryBtn);
