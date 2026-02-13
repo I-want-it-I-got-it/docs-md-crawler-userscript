@@ -1123,6 +1123,11 @@
     return parseNavigationLinksFromDocument(doc, baseUrl);
   }
 
+  function parseCategoryLinksFromHtml(html, baseUrl, options) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return parseCategoryLinksFromDocument(doc, baseUrl, options);
+  }
+
   function getLinkScopeNodes(doc, preferContentScopes) {
     if (!doc || typeof doc.querySelectorAll !== 'function') {
       return [];
@@ -1187,6 +1192,36 @@
     return scopes;
   }
 
+  function getCategoryScopeNodes(doc) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') {
+      return [];
+    }
+    const scopes = [];
+    const seen = new Set();
+    const selectors = [
+      'header nav',
+      'header [role="navigation"]',
+      '[role="banner"] nav',
+      '.top-nav',
+      '.site-nav',
+      '.docs-nav',
+      '.navbar',
+      'nav[aria-label*="category" i]'
+    ];
+
+    selectors.forEach((selector) => {
+      doc.querySelectorAll(selector).forEach((node) => {
+        if (!node || seen.has(node)) {
+          return;
+        }
+        seen.add(node);
+        scopes.push(node);
+      });
+    });
+
+    return scopes;
+  }
+
   function isNavigationLikeAnchor(anchor, footerSelector) {
     if (!anchor) {
       return false;
@@ -1216,6 +1251,19 @@
       return segments.length ? segments[0].toLowerCase() : '';
     } catch (_) {
       return '';
+    }
+  }
+
+  function getDocRootPathFromUrl(url) {
+    try {
+      const pathname = new URL(url).pathname;
+      const segments = splitPathSegments(pathname);
+      if (!segments.length) {
+        return '/';
+      }
+      return '/' + segments[0];
+    } catch (_) {
+      return '/';
     }
   }
 
@@ -1428,6 +1476,72 @@
     return links;
   }
 
+  function parseCategoryLinksFromDocument(doc, baseUrl, options) {
+    const opts = options || {};
+    const excludePatterns = Array.isArray(opts.excludePatterns) ? opts.excludePatterns : [];
+    const docsRootPath = normalizeRootPath(opts.docsRootPath || getDocRootPathFromUrl(baseUrl));
+    const links = [];
+    const unique = new Set();
+
+    let baseOrigin = '';
+    let normalizedBase = '';
+    try {
+      baseOrigin = new URL(baseUrl).origin;
+      normalizedBase = normalizeUrl(baseUrl);
+    } catch (_) {
+      return links;
+    }
+
+    if (!doc || typeof doc.querySelectorAll !== 'function') {
+      return links;
+    }
+
+    const scopes = getCategoryScopeNodes(doc);
+    scopes.forEach((scope) => {
+      scope.querySelectorAll('a[href]').forEach((a) => {
+        if (!a) {
+          return;
+        }
+        const raw = a.getAttribute('href');
+        if (!raw) {
+          return;
+        }
+
+        let absolute;
+        try {
+          absolute = new URL(raw, baseUrl).href;
+        } catch (_) {
+          return;
+        }
+
+        const normalized = normalizeUrl(absolute);
+        if (!normalized || normalized === normalizedBase) {
+          return;
+        }
+        if (!isDocUrl(normalized, baseOrigin, baseUrl, excludePatterns)) {
+          return;
+        }
+
+        try {
+          const pathname = new URL(normalized).pathname;
+          if (docsRootPath !== '/' && !pathStartsWithRoot(pathname, docsRootPath)) {
+            return;
+          }
+        } catch (_) {
+          return;
+        }
+
+        if (unique.has(normalized)) {
+          return;
+        }
+        unique.add(normalized);
+        links.push(normalized);
+      });
+    });
+
+    return links;
+  }
+
   function collectVisibleLinksFromCurrentPage(baseUrl) {
     if (typeof document === 'undefined') {
       return [];
@@ -1440,6 +1554,13 @@
       return [];
     }
     return parseNavigationLinksFromDocument(document, baseUrl);
+  }
+
+  function collectCategoryLinksFromCurrentPage(baseUrl, options) {
+    if (typeof document === 'undefined') {
+      return [];
+    }
+    return parseCategoryLinksFromDocument(document, baseUrl, options);
   }
 
   function extractDocTitle(doc, fallbackUrl) {
@@ -1635,6 +1756,7 @@
       normalizeUrl,
       parseLinksFromDocument,
       parseNavigationLinksFromDocument,
+      parseCategoryLinksFromDocument,
       inferDocRootPrefixes,
       isLikelyDocUrlByStructure,
       matchesDocRootPrefix,
@@ -2509,9 +2631,12 @@
     const excludePatterns = options.excludePatterns || [];
     const seedLinks = Array.isArray(options.seedLinks) ? options.seedLinks : [];
     const navigationSeedLinks = Array.isArray(options.navigationSeedLinks) ? options.navigationSeedLinks : [];
+    const categorySeedLinks = Array.isArray(options.categorySeedLinks) ? options.categorySeedLinks : [];
+    const docsRootPath = normalizeRootPath(options.docsRootPath || getDocRootPathFromUrl(startUrl));
     const crawlDescendantsOnly = options.crawlDescendantsOnly !== false;
     const useSitemap = options.useSitemap === true && !crawlDescendantsOnly;
     const followLinksInsideArticle = options.followLinksInsideArticle === true;
+    const useContentLinks = options.useContentLinks === true;
 
     let sitemapUrls = [];
     if (useSitemap) {
@@ -2546,6 +2671,16 @@
       const normalized = normalizeUrl(maybeUrl);
       if (!normalized) return;
       if (!isDocUrl(normalized, origin, startUrl, excludePatterns)) return;
+      if (docsRootPath !== '/') {
+        try {
+          const pathname = new URL(normalized).pathname;
+          if (!pathStartsWithRoot(pathname, docsRootPath)) {
+            return;
+          }
+        } catch (_) {
+          return;
+        }
+      }
 
       const isDocLike = isLikelyDocUrlByStructure(normalized);
       const matchesRoot = matchesDocRootPrefix(normalized, docRootPrefixes);
@@ -2574,6 +2709,7 @@
     addUrl(startUrl, 0, 'start');
     seedLinks.forEach((seedUrl) => addUrl(seedUrl, 1, 'seed'));
     navigationSeedLinks.forEach((navUrl) => addUrl(navUrl, 1, 'nav-seed'));
+    categorySeedLinks.forEach((categoryUrl) => addUrl(categoryUrl, 1, 'category-seed'));
     if (useSitemap) {
       sitemapUrls.forEach((sitemapUrl) => addUrl(sitemapUrl, 1, 'sitemap'));
     }
@@ -2618,12 +2754,20 @@
         followLinksInsideArticle
       });
 
+      const categoryLinks = parseCategoryLinksFromHtml(html, current, {
+        docsRootPath,
+        excludePatterns
+      });
+      for (const categoryLink of categoryLinks) {
+        addUrl(categoryLink, depth + 1, 'category');
+      }
+
       const navigationLinks = parseNavigationLinksFromHtml(html, current);
       for (const navLink of navigationLinks) {
         addUrl(navLink, depth + 1, 'nav');
       }
 
-      if (shouldExpand) {
+      if (useContentLinks && shouldExpand) {
         const links = parseLinksFromHtml(html, current);
         for (const link of links) {
           addUrl(link, depth + 1, 'crawl');
@@ -2717,16 +2861,21 @@
     }
 
     const startUrl = normalizeUrl(location.href) || location.href;
+    const docsRootPath = getDocRootPathFromUrl(startUrl);
     const visibleLinks = collectVisibleLinksFromCurrentPage(startUrl);
+    const categoryLinks = collectCategoryLinksFromCurrentPage(startUrl, {
+      docsRootPath,
+      excludePatterns: DEFAULT_EXCLUDES
+    });
     const navigationLinks = collectNavigationLinksFromCurrentPage(startUrl);
     state.scanStartUrl = startUrl;
     resetExportProgress();
     clearDiagnosticLogs();
     addDiagnosticLog('SCAN', '开始扫描，起始地址: ' + startUrl);
-    addDiagnosticLog('SCAN', '当前页面可见链接: ' + visibleLinks.length);
-    addDiagnosticLog('SCAN', '当前页面导航链接: ' + navigationLinks.length);
-    addDiagnosticLog('SCAN', '扫描策略: 优先按导航栏分类扩展，再递归正文链接（不启用 sitemap 全站扩展）');
-    addDiagnosticLog('SCAN', '链接扩展: 默认不跟进文章页正文内链接');
+    addDiagnosticLog('SCAN', '文档根路径: ' + docsRootPath);
+    addDiagnosticLog('SCAN', '顶部分类链接: ' + categoryLinks.length + '，左侧目录链接: ' + navigationLinks.length);
+    addDiagnosticLog('SCAN', '扫描策略: 先按顶部分类展开，再按左侧目录递归（默认不跟进正文链接）');
+    addDiagnosticLog('SCAN', '当前页面正文链接采集数量（仅记录）: ' + visibleLinks.length);
 
     state.scanning = true;
     resetPauseState();
@@ -2751,7 +2900,7 @@
     state.queueCount = 0;
     state.currentUrl = '';
     state.doneCount = 0;
-    updateProgress('开始扫描当前页面及其子链接...');
+    updateProgress('开始按分类与左侧目录扫描...');
     let scanSucceeded = false;
 
     try {
@@ -2760,11 +2909,14 @@
         startUrl,
         maxDepth: DEFAULTS.maxDepth,
         excludePatterns: DEFAULT_EXCLUDES,
-        seedLinks: visibleLinks,
+        seedLinks: [],
         navigationSeedLinks: navigationLinks,
+        categorySeedLinks: categoryLinks,
+        docsRootPath,
         crawlDescendantsOnly: true,
         useSitemap: false,
         followLinksInsideArticle: false,
+        useContentLinks: false,
         requestDelayMs: DEFAULTS.requestDelayMs,
         retries: DEFAULTS.retries
       });

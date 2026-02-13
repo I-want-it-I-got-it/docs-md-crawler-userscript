@@ -186,6 +186,70 @@ test('parseNavigationLinksFromDocument collects sidebar category links and skips
   ]);
 });
 
+test('parseCategoryLinksFromDocument collects top category links under docs root', () => {
+  const categoryAnchors = [
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/docs/guide' : '';
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/docs/api' : '';
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/pricing' : '';
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/docs/login' : '';
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? 'https://example.com/docs/api' : '';
+      }
+    }
+  ];
+
+  const headerScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? categoryAnchors : [];
+    }
+  };
+
+  const mockDoc = {
+    querySelectorAll(selector) {
+      if (
+        selector === 'header nav' ||
+        selector === 'header [role="navigation"]' ||
+        selector === '[role="banner"] nav' ||
+        selector === '.top-nav'
+      ) {
+        return [headerScope];
+      }
+      return [];
+    }
+  };
+
+  const links = crawler.parseCategoryLinksFromDocument(
+    mockDoc,
+    'https://example.com/docs/start',
+    {
+      docsRootPath: '/docs',
+      excludePatterns: ['/login']
+    }
+  );
+
+  assert.deepEqual(links, [
+    'https://example.com/docs/guide',
+    'https://example.com/docs/api'
+  ]);
+});
+
 test('inferDocRootPrefixes prefers article roots over generic category roots', () => {
   const roots = crawler.inferDocRootPrefixes(
     'https://example.com/categories/ai-agents',
