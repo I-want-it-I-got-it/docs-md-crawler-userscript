@@ -165,13 +165,13 @@
 
     const prefixDirs = rootSegments.concat(relativeDirs);
     const baseDir = prefixDirs.length ? prefixDirs.join('/') + '/' : '';
-    let fileName = safeLeaf + '__' + safeTitle + '.md';
+    let fileName = safeTitle + '.md';
     let candidate = baseDir + fileName;
 
     if (usedPaths) {
       let counter = 2;
       while (usedPaths.has(candidate)) {
-        fileName = safeLeaf + '__' + safeTitle + '-' + counter + '.md';
+        fileName = safeTitle + '-' + counter + '.md';
         candidate = baseDir + fileName;
         counter += 1;
       }

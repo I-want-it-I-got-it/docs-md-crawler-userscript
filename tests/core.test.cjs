@@ -153,16 +153,16 @@ test('shouldExpandLinksFromPage skips expanding links on article pages by defaul
   );
 });
 
-test('buildMarkdownPath uses url segment + title and resolves collisions', () => {
+test('buildMarkdownPath uses article title as filename and resolves collisions', () => {
   const used = new Set();
   const a = crawler.buildMarkdownPath('https://example.com/docs/guide/install', '安装指南', '/docs', used);
-  assert.equal(a, 'docs/guide/install__安装指南.md');
+  assert.equal(a, 'docs/guide/安装指南.md');
 
   const b = crawler.buildMarkdownPath('https://example.com/docs/guide/install?ref=1', '安装指南', '/docs', used);
-  assert.equal(b, 'docs/guide/install__安装指南-2.md');
+  assert.equal(b, 'docs/guide/安装指南-2.md');
 
   const c = crawler.buildMarkdownPath('https://example.com/docs/guide/', '快速开始', '/docs', used);
-  assert.equal(c, 'docs/guide/index__快速开始.md');
+  assert.equal(c, 'docs/guide/快速开始.md');
 });
 
 test('getDisplayTitle prefers page title and falls back to url segment', () => {
