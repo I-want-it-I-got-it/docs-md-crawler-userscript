@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.10
+// @version      0.2.11
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -2344,7 +2344,8 @@
     const maxDepth = options.maxDepth;
     const excludePatterns = options.excludePatterns || [];
     const seedLinks = Array.isArray(options.seedLinks) ? options.seedLinks : [];
-    const useSitemap = options.useSitemap !== false;
+    const crawlDescendantsOnly = options.crawlDescendantsOnly !== false;
+    const useSitemap = options.useSitemap === true && !crawlDescendantsOnly;
 
     let sitemapUrls = [];
     if (useSitemap) {
@@ -2359,10 +2360,13 @@
       addDiagnosticLog('SCAN', 'Sitemap 候选: ' + sitemapUrls.length);
     }
 
-    const inferredRoots = inferDocRootPrefixes(startUrl, seedLinks, sitemapUrls, origin);
-    const docRootPrefixes = new Set(inferredRoots);
-    if (inferredRoots.length) {
-      addDiagnosticLog('SCAN', 'URL 结构前缀: ' + inferredRoots.map((item) => '/' + item + '/').join(', '));
+    let docRootPrefixes = new Set();
+    if (!crawlDescendantsOnly) {
+      const inferredRoots = inferDocRootPrefixes(startUrl, seedLinks, sitemapUrls, origin);
+      docRootPrefixes = new Set(inferredRoots);
+      if (inferredRoots.length) {
+        addDiagnosticLog('SCAN', 'URL 结构前缀: ' + inferredRoots.map((item) => '/' + item + '/').join(', '));
+      }
     }
 
     const discovered = new Set();
@@ -2379,8 +2383,7 @@
 
       const isDocLike = isLikelyDocUrlByStructure(normalized);
       const matchesRoot = matchesDocRootPrefix(normalized, docRootPrefixes);
-      const isStart = source === 'start';
-      const shouldCrawl = isStart || matchesRoot || isDocLike;
+      const shouldCrawl = crawlDescendantsOnly ? true : (matchesRoot || isDocLike);
       if (!shouldCrawl) {
         return;
       }
@@ -2391,7 +2394,9 @@
         depthMap.set(normalized, depth);
       }
 
-      if (isDocLike && matchesRoot && !discovered.has(normalized)) {
+      if (crawlDescendantsOnly) {
+        discovered.add(normalized);
+      } else if (isDocLike && matchesRoot && !discovered.has(normalized)) {
         discovered.add(normalized);
       }
 
@@ -2402,7 +2407,9 @@
 
     addUrl(startUrl, 0, 'start');
     seedLinks.forEach((seedUrl) => addUrl(seedUrl, 1, 'seed'));
-    sitemapUrls.forEach((sitemapUrl) => addUrl(sitemapUrl, 1, 'sitemap'));
+    if (useSitemap) {
+      sitemapUrls.forEach((sitemapUrl) => addUrl(sitemapUrl, 1, 'sitemap'));
+    }
 
     while (queue.length) {
       await waitIfPaused();
@@ -2533,6 +2540,7 @@
     clearDiagnosticLogs();
     addDiagnosticLog('SCAN', '开始扫描，起始地址: ' + startUrl);
     addDiagnosticLog('SCAN', '当前页面可见链接: ' + visibleLinks.length);
+    addDiagnosticLog('SCAN', '扫描策略: 仅递归当前页面可达子链接（不启用 sitemap 全站扩展）');
 
     state.scanning = true;
     resetPauseState();
@@ -2567,7 +2575,8 @@
         maxDepth: DEFAULTS.maxDepth,
         excludePatterns: DEFAULT_EXCLUDES,
         seedLinks: visibleLinks,
-        useSitemap: true,
+        crawlDescendantsOnly: true,
+        useSitemap: false,
         requestDelayMs: DEFAULTS.requestDelayMs,
         retries: DEFAULTS.retries
       });
