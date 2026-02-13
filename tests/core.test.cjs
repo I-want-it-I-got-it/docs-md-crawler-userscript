@@ -141,40 +141,40 @@ test('computeZipPackProgress converts JSZip metadata percent to 0-100 stage prog
   );
 });
 
-test('generateZipBlobWithFallback uses uint8array as primary pack channel', async () => {
+test('generateZipBlobWithFallback uses blob as primary pack channel', async () => {
   const callTypes = [];
   const zip = {
     generateAsync(options) {
       callTypes.push(options.type);
-      return Promise.resolve(Uint8Array.from([80, 75, 3, 4]));
-    }
-  };
-
-  const result = await crawler.generateZipBlobWithFallback(zip, { timeoutMs: 20 });
-  assert.deepEqual(callTypes, ['uint8array']);
-  assert.equal(result.fallbackUsed, false);
-  assert.equal(result.timeoutTriggered, false);
-  assert.equal(result.primaryType, 'uint8array');
-  assert.ok(result.blob instanceof Blob);
-});
-
-test('generateZipBlobWithFallback falls back to blob when uint8array is unsupported', async () => {
-  const callTypes = [];
-  const zip = {
-    generateAsync(options) {
-      callTypes.push(options.type);
-      if (options.type === 'uint8array') {
-        return Promise.reject(new Error('uint8array not supported'));
-      }
       return Promise.resolve(new Blob([Uint8Array.from([80, 75, 3, 4])], { type: 'application/zip' }));
     }
   };
 
   const result = await crawler.generateZipBlobWithFallback(zip, { timeoutMs: 20 });
-  assert.deepEqual(callTypes, ['uint8array', 'blob']);
+  assert.deepEqual(callTypes, ['blob']);
+  assert.equal(result.fallbackUsed, false);
+  assert.equal(result.timeoutTriggered, false);
+  assert.equal(result.primaryType, 'blob');
+  assert.ok(result.blob instanceof Blob);
+});
+
+test('generateZipBlobWithFallback falls back to uint8array when blob is unsupported', async () => {
+  const callTypes = [];
+  const zip = {
+    generateAsync(options) {
+      callTypes.push(options.type);
+      if (options.type === 'blob') {
+        return Promise.reject(new Error('blob not supported'));
+      }
+      return Promise.resolve(Uint8Array.from([80, 75, 3, 4]));
+    }
+  };
+
+  const result = await crawler.generateZipBlobWithFallback(zip, { timeoutMs: 20 });
+  assert.deepEqual(callTypes, ['blob', 'uint8array']);
   assert.equal(result.fallbackUsed, true);
-  assert.equal(result.primaryType, 'uint8array');
-  assert.equal(result.fallbackType, 'blob');
+  assert.equal(result.primaryType, 'blob');
+  assert.equal(result.fallbackType, 'uint8array');
   assert.ok(result.blob instanceof Blob);
 });
 
@@ -191,7 +191,7 @@ test('generateZipBlobWithFallback fails fast on primary timeout without starting
     () => crawler.generateZipBlobWithFallback(zip, { timeoutMs: 20 }),
     /zip-pack-timeout/
   );
-  assert.deepEqual(callTypes, ['uint8array']);
+  assert.deepEqual(callTypes, ['blob']);
 });
 
 test('triggerZipDownloadByUrl prefers GM download path when available', async () => {

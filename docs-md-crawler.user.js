@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.6
+// @version      0.2.7
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -432,14 +432,18 @@
     const opts = options || {};
     const timeoutMs = Number(opts.timeoutMs) || DEFAULTS.zipPackTimeoutMs;
     const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : undefined;
-    const primaryType = opts.primaryType === 'blob' ? 'blob' : 'uint8array';
+    const primaryType = opts.primaryType === 'uint8array' ? 'uint8array' : 'blob';
     const fallbackType = primaryType === 'uint8array' ? 'blob' : 'uint8array';
     const primaryTimeoutError = 'zip-pack-timeout';
     const fallbackTimeoutError = 'zip-pack-fallback-timeout';
 
     try {
       const primaryPayload = await withTimeout(
-        zip.generateAsync({ type: primaryType }, onProgress),
+        zip.generateAsync({
+          type: primaryType,
+          compression: 'STORE',
+          streamFiles: true
+        }, onProgress),
         timeoutMs,
         primaryTimeoutError
       );
@@ -462,7 +466,11 @@
       }
 
       const fallbackPayload = await withTimeout(
-        zip.generateAsync({ type: fallbackType }, onProgress),
+        zip.generateAsync({
+          type: fallbackType,
+          compression: 'STORE',
+          streamFiles: true
+        }, onProgress),
         timeoutMs,
         fallbackTimeoutError
       );
@@ -2332,6 +2340,9 @@
     const turndown = createTurndownService();
     const usedPaths = new Set();
     const pageDrafts = [];
+    let zipInputCount = 0;
+    let zipInputTextBytes = 0;
+    let zipInputBinaryBytes = 0;
     let exportSucceeded = false;
 
     try {
@@ -2421,6 +2432,8 @@
         ].join('\n');
 
         zip.file(page.path, frontMatter + markdown + '\n');
+        zipInputCount += 1;
+        zipInputTextBytes += new TextEncoder().encode(frontMatter + markdown + '\n').length;
         exportedPages.push(page);
         state.doneCount += 1;
         exportStats.pageConverted += 1;
@@ -2447,36 +2460,56 @@
         updateExportStage('图片下载', 0, 0);
       }
 
-      zip.file('SUMMARY.md', buildSummary(exportedPages));
+      const summaryText = buildSummary(exportedPages);
+      zip.file('SUMMARY.md', summaryText);
+      zipInputCount += 1;
+      zipInputTextBytes += new TextEncoder().encode(summaryText).length;
 
       if (state.failed.length) {
         const failText = state.failed
           .map((item) => item.url + ' | ' + item.reason)
           .join('\n');
         zip.file('failed-urls.txt', failText + '\n');
+        zipInputCount += 1;
+        zipInputTextBytes += new TextEncoder().encode(failText + '\n').length;
       }
 
       updateExportStage('ZIP打包', 0, 100);
       addDiagnosticLog(
         'ZIP',
-        '开始生成 ZIP（主通道 uint8array，超时 ' + DEFAULTS.zipPackTimeoutMs + 'ms）'
+        '开始生成 ZIP（主通道 blob，超时 ' + DEFAULTS.zipPackTimeoutMs + 'ms）'
       );
-      const zipPack = await generateZipBlobWithFallback(zip, {
-        timeoutMs: DEFAULTS.zipPackTimeoutMs,
-        primaryType: 'uint8array',
-        onProgress: (metadata) => {
-          const progress = computeZipPackProgress(metadata);
-          updateExportStage('ZIP打包', progress.completed, progress.total);
-        }
-      });
+      zipInputBinaryBytes = exportStats.imageBytes;
+      addDiagnosticLog(
+        'ZIP',
+        '输入统计: files=' + zipInputCount + ', text=' + formatBytes(zipInputTextBytes) + ', binary=' + formatBytes(zipInputBinaryBytes)
+      );
+      const zipPackStartedAt = Date.now();
+      const zipHeartbeatTimer = setInterval(() => {
+        const elapsedSec = Math.round((Date.now() - zipPackStartedAt) / 1000);
+        addDiagnosticLog('ZIP', '打包进行中，已耗时 ' + elapsedSec + 's');
+      }, 10000);
+      let zipPack = null;
+      try {
+        zipPack = await generateZipBlobWithFallback(zip, {
+          timeoutMs: DEFAULTS.zipPackTimeoutMs,
+          primaryType: 'blob',
+          onProgress: (metadata) => {
+            const progress = computeZipPackProgress(metadata);
+            updateExportStage('ZIP打包', progress.completed, progress.total);
+          }
+        });
+      } finally {
+        clearInterval(zipHeartbeatTimer);
+      }
       if (zipPack.fallbackUsed) {
         addDiagnosticLog(
           'ZIP',
-          'uint8array 通道不兼容，已切换 blob 回退'
+          'blob 通道不兼容，已切换 uint8array 回退'
         );
         setStatus('ZIP 打包主通道不兼容，已自动切换兼容模式');
       } else {
-        addDiagnosticLog('ZIP', 'uint8array 通道生成完成');
+        addDiagnosticLog('ZIP', 'blob 通道生成完成');
       }
       const blob = zipPack.blob;
       updateExportStage('ZIP打包', 100, 100);
@@ -2526,9 +2559,9 @@
     } catch (err) {
       const errMessage = err && err.message ? err.message : 'unknown';
       if (errMessage === 'zip-pack-timeout') {
-        setStatus('导出失败: ZIP 打包超时（主通道 uint8array）');
+        setStatus('导出失败: ZIP 打包超时（主通道 blob）');
       } else if (errMessage === 'zip-pack-fallback-timeout') {
-        setStatus('导出失败: ZIP 打包超时（回退通道 blob）');
+        setStatus('导出失败: ZIP 打包超时（回退通道 uint8array）');
       } else {
         setStatus('导出失败: ' + errMessage);
       }
