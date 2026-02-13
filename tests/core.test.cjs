@@ -250,6 +250,43 @@ test('parseCategoryLinksFromDocument collects top category links under docs root
   ]);
 });
 
+test('deriveCategoryPathPrefixes builds crawl prefixes from main category links', () => {
+  const prefixes = crawler.deriveCategoryPathPrefixes(
+    'https://example.com/docs/start',
+    [
+      'https://example.com/docs/guide',
+      'https://example.com/docs/api/reference',
+      'https://example.com/blog/announcements'
+    ]
+  );
+
+  assert.deepEqual(prefixes, [
+    '/docs/api/reference',
+    '/docs/guide'
+  ]);
+
+  const fallback = crawler.deriveCategoryPathPrefixes(
+    'https://example.com/docs/start',
+    []
+  );
+  assert.deepEqual(fallback, ['/docs']);
+});
+
+test('matchesAnyPathPrefix constrains deep crawl into category paths', () => {
+  assert.equal(
+    crawler.matchesAnyPathPrefix('https://example.com/docs/api/auth/login', ['/docs/guide', '/docs/api']),
+    true
+  );
+  assert.equal(
+    crawler.matchesAnyPathPrefix('https://example.com/docs/changelog', ['/docs/guide', '/docs/api']),
+    false
+  );
+  assert.equal(
+    crawler.matchesAnyPathPrefix('https://example.com/docs/changelog', []),
+    true
+  );
+});
+
 test('inferDocRootPrefixes prefers article roots over generic category roots', () => {
   const roots = crawler.inferDocRootPrefixes(
     'https://example.com/categories/ai-agents',
