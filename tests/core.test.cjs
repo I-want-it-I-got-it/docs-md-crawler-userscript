@@ -160,6 +160,22 @@ test('generateZipBlobWithFallback switches to uint8array when blob generation st
   assert.ok(result.blob instanceof Blob);
 });
 
+test('generateZipBlobWithFallback rejects when both blob and uint8array generation stall', async () => {
+  const callTypes = [];
+  const zip = {
+    generateAsync(options) {
+      callTypes.push(options.type);
+      return new Promise(() => {});
+    }
+  };
+
+  await assert.rejects(
+    () => crawler.generateZipBlobWithFallback(zip, { timeoutMs: 20 }),
+    /zip-pack-fallback-timeout/
+  );
+  assert.deepEqual(callTypes, ['blob', 'uint8array']);
+});
+
 test('triggerZipDownloadByUrl prefers GM download path when available', async () => {
   const calls = [];
   const result = await crawler.triggerZipDownloadByUrl('blob:zip-1', 'demo.zip', {

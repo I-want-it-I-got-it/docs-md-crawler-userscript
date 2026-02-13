@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.3
+// @version      0.2.4
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -435,7 +435,11 @@
         throw err;
       }
 
-      const bytes = await zip.generateAsync({ type: 'uint8array' }, onProgress);
+      const bytes = await withTimeout(
+        zip.generateAsync({ type: 'uint8array' }, onProgress),
+        timeoutMs,
+        'zip-pack-fallback-timeout'
+      );
       return {
         blob: toZipBlob(bytes),
         fallbackUsed: true,
