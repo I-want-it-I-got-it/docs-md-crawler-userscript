@@ -33,7 +33,7 @@
     timeoutMs: 15000,
     retries: 2,
     imageMode: 'local',
-    zipPackTimeoutMs: 120000
+    zipPackTimeoutMs: 30000
   };
   const EXPORT_BUTTON_IDLE_TEXT = '导出 ZIP';
   const EXPORT_STAGE_SEQUENCE = ['页面抓取', 'Markdown转换', '图片下载', 'ZIP打包'];
@@ -422,6 +422,152 @@
     }
 
     throw new Error('unsupported-zip-payload');
+  }
+
+  function encodeUtf8(value) {
+    return new TextEncoder().encode(String(value || ''));
+  }
+
+  function writeUint16LE(dataView, offset, value) {
+    dataView.setUint16(offset, Number(value) >>> 0, true);
+  }
+
+  function writeUint32LE(dataView, offset, value) {
+    dataView.setUint32(offset, Number(value) >>> 0, true);
+  }
+
+  let crc32TableCache = null;
+
+  function getCrc32Table() {
+    if (crc32TableCache) {
+      return crc32TableCache;
+    }
+    const table = new Uint32Array(256);
+    for (let i = 0; i < 256; i += 1) {
+      let c = i;
+      for (let j = 0; j < 8; j += 1) {
+        c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      table[i] = c >>> 0;
+    }
+    crc32TableCache = table;
+    return table;
+  }
+
+  function computeCrc32(bytes) {
+    const table = getCrc32Table();
+    let crc = 0xffffffff;
+    for (let i = 0; i < bytes.length; i += 1) {
+      const idx = (crc ^ bytes[i]) & 0xff;
+      crc = table[idx] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function toUint8Array(value) {
+    if (value == null) {
+      return new Uint8Array(0);
+    }
+    if (isArrayBufferValue(value)) {
+      return copyToUint8Array(new Uint8Array(value));
+    }
+    if (ArrayBuffer.isView(value)) {
+      return copyToUint8Array(new Uint8Array(value.buffer, value.byteOffset || 0, value.byteLength || 0));
+    }
+    if (typeof value === 'string') {
+      return encodeUtf8(value);
+    }
+    return encodeUtf8(String(value));
+  }
+
+  function buildStoreZipBlob(entries) {
+    const normalized = (entries || [])
+      .map((entry) => {
+        if (!entry || !entry.path) {
+          return null;
+        }
+        const path = String(entry.path).replace(/\\/g, '/');
+        if (!path) {
+          return null;
+        }
+        const nameBytes = encodeUtf8(path);
+        const dataBytes = entry.bytes != null ? toUint8Array(entry.bytes) : toUint8Array(entry.text || '');
+        return {
+          path,
+          nameBytes,
+          dataBytes,
+          crc32: computeCrc32(dataBytes)
+        };
+      })
+      .filter(Boolean);
+
+    if (!normalized.length) {
+      throw new Error('zip-store-empty');
+    }
+
+    const localParts = [];
+    const centralParts = [];
+    let localOffset = 0;
+    let centralSize = 0;
+
+    normalized.forEach((item) => {
+      const nameLen = item.nameBytes.byteLength;
+      const dataLen = item.dataBytes.byteLength;
+
+      const localHeader = new Uint8Array(30);
+      const localView = new DataView(localHeader.buffer, localHeader.byteOffset, localHeader.byteLength);
+      writeUint32LE(localView, 0, 0x04034b50);
+      writeUint16LE(localView, 4, 20);
+      writeUint16LE(localView, 6, 0);
+      writeUint16LE(localView, 8, 0);
+      writeUint16LE(localView, 10, 0);
+      writeUint16LE(localView, 12, 0);
+      writeUint32LE(localView, 14, item.crc32);
+      writeUint32LE(localView, 18, dataLen);
+      writeUint32LE(localView, 22, dataLen);
+      writeUint16LE(localView, 26, nameLen);
+      writeUint16LE(localView, 28, 0);
+      localParts.push(localHeader, item.nameBytes, item.dataBytes);
+
+      const centralHeader = new Uint8Array(46);
+      const centralView = new DataView(centralHeader.buffer, centralHeader.byteOffset, centralHeader.byteLength);
+      writeUint32LE(centralView, 0, 0x02014b50);
+      writeUint16LE(centralView, 4, 20);
+      writeUint16LE(centralView, 6, 20);
+      writeUint16LE(centralView, 8, 0);
+      writeUint16LE(centralView, 10, 0);
+      writeUint16LE(centralView, 12, 0);
+      writeUint16LE(centralView, 14, 0);
+      writeUint32LE(centralView, 16, item.crc32);
+      writeUint32LE(centralView, 20, dataLen);
+      writeUint32LE(centralView, 24, dataLen);
+      writeUint16LE(centralView, 28, nameLen);
+      writeUint16LE(centralView, 30, 0);
+      writeUint16LE(centralView, 32, 0);
+      writeUint16LE(centralView, 34, 0);
+      writeUint16LE(centralView, 36, 0);
+      writeUint32LE(centralView, 38, 0);
+      writeUint32LE(centralView, 42, localOffset);
+      centralParts.push(centralHeader, item.nameBytes);
+
+      const localRecordSize = localHeader.byteLength + nameLen + dataLen;
+      const centralRecordSize = centralHeader.byteLength + nameLen;
+      localOffset += localRecordSize;
+      centralSize += centralRecordSize;
+    });
+
+    const end = new Uint8Array(22);
+    const endView = new DataView(end.buffer, end.byteOffset, end.byteLength);
+    writeUint32LE(endView, 0, 0x06054b50);
+    writeUint16LE(endView, 4, 0);
+    writeUint16LE(endView, 6, 0);
+    writeUint16LE(endView, 8, normalized.length);
+    writeUint16LE(endView, 10, normalized.length);
+    writeUint32LE(endView, 12, centralSize);
+    writeUint32LE(endView, 16, localOffset);
+    writeUint16LE(endView, 20, 0);
+
+    return new Blob(localParts.concat(centralParts).concat([end]), { type: 'application/zip' });
   }
 
   async function generateZipBlobWithFallback(zip, options) {
@@ -1073,6 +1219,7 @@
       formatFailureReason,
       normalizeBinaryPayload,
       generateZipBlobWithFallback,
+      buildStoreZipBlob,
       triggerZipDownloadByUrl,
       normalizeRootPath,
       sanitizeSegment,
@@ -2215,7 +2362,7 @@
     }
   }
 
-  async function downloadImagesToZip(zip, imageJobs, onProgress, onSuccess) {
+  async function downloadImagesToZip(zip, imageJobs, onProgress, onSuccess, onAdded) {
     const uniqueJobs = [];
     const seen = new Set();
     for (const job of imageJobs) {
@@ -2231,6 +2378,9 @@
       try {
         const binary = await fetchBinaryWithRetry(job.url, DEFAULTS.retries, DEFAULTS.requestDelayMs);
         zip.file(job.path, binary, { binary: true });
+        if (typeof onAdded === 'function') {
+          onAdded(job.path, binary);
+        }
         if (typeof onSuccess === 'function') {
           onSuccess(binary.byteLength || binary.length || 0);
         }
@@ -2340,6 +2490,7 @@
     const turndown = createTurndownService();
     const usedPaths = new Set();
     const pageDrafts = [];
+    const zipEntries = [];
     let zipInputCount = 0;
     let zipInputTextBytes = 0;
     let zipInputBinaryBytes = 0;
@@ -2431,9 +2582,14 @@
           ''
         ].join('\n');
 
-        zip.file(page.path, frontMatter + markdown + '\n');
+        const markdownText = frontMatter + markdown + '\n';
+        zip.file(page.path, markdownText);
+        zipEntries.push({
+          path: page.path,
+          text: markdownText
+        });
         zipInputCount += 1;
-        zipInputTextBytes += new TextEncoder().encode(frontMatter + markdown + '\n').length;
+        zipInputTextBytes += new TextEncoder().encode(markdownText).length;
         exportedPages.push(page);
         state.doneCount += 1;
         exportStats.pageConverted += 1;
@@ -2453,6 +2609,15 @@
             },
             (bytes) => {
               exportStats.imageBytes += bytes;
+            },
+            (path, binary) => {
+              const normalizedBinary = copyToUint8Array(binary);
+              zipEntries.push({
+                path,
+                bytes: normalizedBinary
+              });
+              zipInputCount += 1;
+              zipInputBinaryBytes += normalizedBinary.byteLength;
             }
           );
         }
@@ -2462,6 +2627,10 @@
 
       const summaryText = buildSummary(exportedPages);
       zip.file('SUMMARY.md', summaryText);
+      zipEntries.push({
+        path: 'SUMMARY.md',
+        text: summaryText
+      });
       zipInputCount += 1;
       zipInputTextBytes += new TextEncoder().encode(summaryText).length;
 
@@ -2469,9 +2638,14 @@
         const failText = state.failed
           .map((item) => item.url + ' | ' + item.reason)
           .join('\n');
-        zip.file('failed-urls.txt', failText + '\n');
+        const failedText = failText + '\n';
+        zip.file('failed-urls.txt', failedText);
+        zipEntries.push({
+          path: 'failed-urls.txt',
+          text: failedText
+        });
         zipInputCount += 1;
-        zipInputTextBytes += new TextEncoder().encode(failText + '\n').length;
+        zipInputTextBytes += new TextEncoder().encode(failedText).length;
       }
 
       updateExportStage('ZIP打包', 0, 100);
@@ -2479,7 +2653,6 @@
         'ZIP',
         '开始生成 ZIP（主通道 blob，超时 ' + DEFAULTS.zipPackTimeoutMs + 'ms）'
       );
-      zipInputBinaryBytes = exportStats.imageBytes;
       addDiagnosticLog(
         'ZIP',
         '输入统计: files=' + zipInputCount + ', text=' + formatBytes(zipInputTextBytes) + ', binary=' + formatBytes(zipInputBinaryBytes)
@@ -2499,15 +2672,39 @@
             updateExportStage('ZIP打包', progress.completed, progress.total);
           }
         });
+      } catch (packErr) {
+        const packMessage = normalizeErrorMessage(packErr, 'zip-pack-error');
+        if (packMessage !== 'zip-pack-timeout' && packMessage !== 'zip-pack-fallback-timeout') {
+          throw packErr;
+        }
+        addDiagnosticLog('ZIP', 'JSZip 通道超时，尝试内置 STORE 回退打包');
+        try {
+          zipPack = {
+            blob: buildStoreZipBlob(zipEntries),
+            fallbackUsed: true,
+            timeoutTriggered: true,
+            primaryType: 'store-manual',
+            fallbackType: 'store-manual',
+            method: 'store_manual'
+          };
+          addDiagnosticLog('ZIP', '内置 STORE 回退打包完成');
+        } catch (storeErr) {
+          throw new Error('zip-store-fallback-failed:' + normalizeErrorMessage(storeErr, 'unknown'));
+        }
       } finally {
         clearInterval(zipHeartbeatTimer);
       }
       if (zipPack.fallbackUsed) {
-        addDiagnosticLog(
-          'ZIP',
-          'blob 通道不兼容，已切换 uint8array 回退'
-        );
-        setStatus('ZIP 打包主通道不兼容，已自动切换兼容模式');
+        if (zipPack.method === 'store_manual') {
+          addDiagnosticLog('ZIP', '已切换内置 STORE 打包通道');
+          setStatus('JSZip 打包超时，已切换内置兼容打包模式');
+        } else {
+          addDiagnosticLog(
+            'ZIP',
+            'blob 通道不兼容，已切换 uint8array 回退'
+          );
+          setStatus('ZIP 打包主通道不兼容，已自动切换兼容模式');
+        }
       } else {
         addDiagnosticLog('ZIP', 'blob 通道生成完成');
       }
@@ -2562,6 +2759,8 @@
         setStatus('导出失败: ZIP 打包超时（主通道 blob）');
       } else if (errMessage === 'zip-pack-fallback-timeout') {
         setStatus('导出失败: ZIP 打包超时（回退通道 uint8array）');
+      } else if (errMessage.startsWith('zip-store-fallback-failed:')) {
+        setStatus('导出失败: 内置回退打包失败（' + errMessage.slice('zip-store-fallback-failed:'.length) + '）');
       } else {
         setStatus('导出失败: ' + errMessage);
       }

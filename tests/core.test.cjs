@@ -194,6 +194,29 @@ test('generateZipBlobWithFallback fails fast on primary timeout without starting
   assert.deepEqual(callTypes, ['blob']);
 });
 
+test('buildStoreZipBlob creates a valid store-mode zip payload', async () => {
+  const blob = crawler.buildStoreZipBlob([
+    { path: 'docs/a.md', text: '# A\n' },
+    { path: 'assets/i.bin', bytes: Uint8Array.from([1, 2, 3, 4]) }
+  ]);
+  assert.ok(blob instanceof Blob);
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  assert.equal(view.getUint32(0, true), 0x04034b50);
+  const eocdOffset = bytes.length - 22;
+  assert.equal(view.getUint32(eocdOffset, true), 0x06054b50);
+  assert.equal(view.getUint16(eocdOffset + 8, true), 2);
+  assert.equal(view.getUint16(eocdOffset + 10, true), 2);
+});
+
+test('buildStoreZipBlob rejects empty entry list', () => {
+  assert.throws(
+    () => crawler.buildStoreZipBlob([]),
+    /zip-store-empty/
+  );
+});
+
 test('triggerZipDownloadByUrl prefers GM download path when available', async () => {
   const calls = [];
   const result = await crawler.triggerZipDownloadByUrl('blob:zip-1', 'demo.zip', {
