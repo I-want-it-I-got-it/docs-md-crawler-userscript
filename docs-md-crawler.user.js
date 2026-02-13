@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.13
+// @version      0.2.15
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -179,6 +179,49 @@
     }
 
     return candidate;
+  }
+
+  function normalizeSiteNameHint(rawHint) {
+    const hint = String(rawHint || '').replace(/\s+/g, ' ').trim();
+    if (!hint) {
+      return '';
+    }
+    const head = hint.split(/\s*[|｜\-—–:：·•]\s*/)[0].trim();
+    if (!head) {
+      return '';
+    }
+    const trimmed = head
+      .replace(/\b(docs?|documentation|developers?|developer|guide|guides|platform|文档)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const candidate = trimmed || head;
+    return sanitizeSegment(candidate, '');
+  }
+
+  function buildZipFilename(siteHints, hostname) {
+    const hints = Array.isArray(siteHints) ? siteHints : [siteHints];
+    for (const hint of hints) {
+      const normalized = normalizeSiteNameHint(hint);
+      if (normalized) {
+        return normalized + '.zip';
+      }
+    }
+
+    const hostText = String(hostname || '').trim().toLowerCase().replace(/^www\./, '');
+    if (hostText) {
+      const labels = hostText.split('.').filter(Boolean);
+      const rawLabel = labels.length >= 2 ? labels[labels.length - 2] : labels[0];
+      const prettyLabel = String(rawLabel || '')
+        .replace(/[-_]+/g, ' ')
+        .replace(/\b[a-z]/g, (ch) => ch.toUpperCase())
+        .trim();
+      const fallbackName = sanitizeSegment(prettyLabel, '');
+      if (fallbackName) {
+        return fallbackName + '.zip';
+      }
+    }
+
+    return 'docs-md-export.zip';
   }
 
   function relativePath(fromFile, toFile) {
@@ -755,6 +798,84 @@
     a.click();
     a.remove();
     return Promise.resolve();
+  }
+
+  function playDownloadCompleteSound(options) {
+    const opts = options || {};
+    const AudioContextCtor = opts.AudioContextCtor || (
+      typeof window !== 'undefined'
+        ? (window.AudioContext || window.webkitAudioContext)
+        : null
+    );
+    if (!AudioContextCtor) {
+      return false;
+    }
+
+    let ctx = null;
+    try {
+      ctx = new AudioContextCtor();
+    } catch (_) {
+      return false;
+    }
+
+    if (!ctx || typeof ctx.createOscillator !== 'function' || typeof ctx.createGain !== 'function' || !ctx.destination) {
+      try {
+        if (ctx && typeof ctx.close === 'function') {
+          ctx.close();
+        }
+      } catch (_) {
+        // ignore close failure
+      }
+      return false;
+    }
+
+    const frequencyHz = Number(opts.frequencyHz) > 0 ? Number(opts.frequencyHz) : 880;
+    const durationSec = Number(opts.durationSec) > 0 ? Number(opts.durationSec) : 0.12;
+    const gainValue = Number(opts.gain);
+    const volume = Number.isFinite(gainValue) && gainValue >= 0 ? gainValue : 0.035;
+    const now = Number(ctx.currentTime) || 0;
+
+    try {
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.type = 'sine';
+      if (oscillator.frequency && typeof oscillator.frequency.setValueAtTime === 'function') {
+        oscillator.frequency.setValueAtTime(frequencyHz, now);
+      }
+
+      if (gainNode.gain && typeof gainNode.gain.setValueAtTime === 'function') {
+        gainNode.gain.setValueAtTime(volume, now);
+      }
+      if (gainNode.gain && typeof gainNode.gain.exponentialRampToValueAtTime === 'function') {
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
+      }
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+        Promise.resolve(ctx.resume()).catch(() => {});
+      }
+
+      oscillator.onended = () => {
+        if (typeof ctx.close === 'function') {
+          Promise.resolve(ctx.close()).catch(() => {});
+        }
+      };
+      oscillator.start(now);
+      oscillator.stop(now + durationSec);
+      return true;
+    } catch (_) {
+      try {
+        if (typeof ctx.close === 'function') {
+          Promise.resolve(ctx.close()).catch(() => {});
+        }
+      } catch (_) {
+        // ignore close failure
+      }
+      return false;
+    }
   }
 
   async function triggerZipDownloadByUrl(downloadUrl, filename, deps) {
@@ -1417,6 +1538,7 @@
       shouldExpandLinksFromPage,
       isDocUrl,
       buildMarkdownPath,
+      buildZipFilename,
       getDisplayTitle,
       buildTreeItems,
       buildFailedQueueItems,
@@ -1433,6 +1555,7 @@
       normalizeBinaryPayload,
       generateZipBlobWithFallback,
       buildStoreZipBlob,
+      playDownloadCompleteSound,
       triggerZipDownloadByUrl,
       normalizeRootPath,
       sanitizeSegment,
@@ -2909,8 +3032,28 @@
       }
       const blob = zipPack.blob;
       updateExportStage('ZIP打包', 100, 100);
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = 'docs-md-export-' + stamp + '.zip';
+      const siteHints = [];
+      if (typeof document !== 'undefined') {
+        const metaSelectors = [
+          'meta[property="og:site_name"]',
+          'meta[name="application-name"]',
+          'meta[name="apple-mobile-web-app-title"]'
+        ];
+        for (const selector of metaSelectors) {
+          const metaEl = document.querySelector(selector);
+          const content = metaEl ? metaEl.getAttribute('content') : '';
+          if (content && String(content).trim()) {
+            siteHints.push(content);
+          }
+        }
+        if (document.title && String(document.title).trim()) {
+          siteHints.push(document.title);
+        }
+      }
+      const filename = buildZipFilename(
+        siteHints,
+        typeof location !== 'undefined' ? location.hostname : ''
+      );
 
       const downloadUrl = prepareDownloadLink(blob);
       addDiagnosticLog('DOWNLOAD', '已准备下载链接: ' + filename);
@@ -2938,6 +3081,9 @@
           'DOWNLOAD',
           '自动下载结果: ' + (autoDownloadResult ? autoDownloadResult.method : 'unknown')
         );
+        if (autoDownloadResult) {
+          playDownloadCompleteSound();
+        }
       } catch (err) {
         addDiagnosticLog('ERROR', '自动下载失败: ' + normalizeErrorMessage(err, 'unknown'));
         setStatus('ZIP 已生成，但自动下载失败：' + normalizeErrorMessage(err, 'unknown'));

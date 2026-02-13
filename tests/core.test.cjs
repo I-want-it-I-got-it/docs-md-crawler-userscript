@@ -165,6 +165,21 @@ test('buildMarkdownPath uses article title as filename and resolves collisions',
   assert.equal(c, 'docs/guide/快速开始.md');
 });
 
+test('buildZipFilename uses cleaned site name and falls back safely', () => {
+  assert.equal(
+    crawler.buildZipFilename(['OpenAI Developer Docs | OpenAI'], 'platform.openai.com'),
+    'OpenAI.zip'
+  );
+  assert.equal(
+    crawler.buildZipFilename(['   '], 'docs.example.com'),
+    'Example.zip'
+  );
+  assert.equal(
+    crawler.buildZipFilename([], ''),
+    'docs-md-export.zip'
+  );
+});
+
 test('getDisplayTitle prefers page title and falls back to url segment', () => {
   assert.equal(
     crawler.getDisplayTitle('https://example.com/docs/start/intro', 'Introduction'),
@@ -405,6 +420,96 @@ test('triggerZipDownloadByUrl retries with blob downloader before anchor fallbac
   assert.equal(result.method, 'gm_download_dataurl');
   assert.equal(result.usedFallback, true);
   assert.equal(result.errorMessage, 'blob-url-blocked');
+});
+
+test('playDownloadCompleteSound returns false when AudioContext is unavailable', () => {
+  const played = crawler.playDownloadCompleteSound({
+    AudioContextCtor: null
+  });
+  assert.equal(played, false);
+});
+
+test('playDownloadCompleteSound schedules a short tone and closes context', () => {
+  const frequencyCalls = [];
+  const gainSetCalls = [];
+  const gainRampCalls = [];
+  const startCalls = [];
+  const stopCalls = [];
+  const connectTargets = [];
+  let closed = false;
+
+  const fakeOscillator = {
+    type: '',
+    frequency: {
+      setValueAtTime(value, time) {
+        frequencyCalls.push([value, time]);
+      }
+    },
+    connect(target) {
+      connectTargets.push(target);
+    },
+    start(time) {
+      startCalls.push(time);
+    },
+    stop(time) {
+      stopCalls.push(time);
+      if (typeof this.onended === 'function') {
+        this.onended();
+      }
+    },
+    onended: null
+  };
+
+  const fakeGainNode = {
+    gain: {
+      setValueAtTime(value, time) {
+        gainSetCalls.push([value, time]);
+      },
+      exponentialRampToValueAtTime(value, time) {
+        gainRampCalls.push([value, time]);
+      }
+    },
+    connect(target) {
+      connectTargets.push(target);
+    }
+  };
+
+  function FakeAudioContext() {
+    return {
+      currentTime: 5,
+      state: 'running',
+      destination: { node: 'destination' },
+      createOscillator() {
+        return fakeOscillator;
+      },
+      createGain() {
+        return fakeGainNode;
+      },
+      close() {
+        closed = true;
+      }
+    };
+  }
+
+  const played = crawler.playDownloadCompleteSound({
+    AudioContextCtor: FakeAudioContext,
+    frequencyHz: 660,
+    durationSec: 0.2,
+    gain: 0.05
+  });
+
+  assert.equal(played, true);
+  assert.equal(fakeOscillator.type, 'sine');
+  assert.deepEqual(frequencyCalls, [[660, 5]]);
+  assert.deepEqual(gainSetCalls, [[0.05, 5]]);
+  assert.equal(gainRampCalls.length, 1);
+  assert.equal(gainRampCalls[0][0], 0.0001);
+  assert.ok(Math.abs(gainRampCalls[0][1] - 5.2) < 0.00001);
+  assert.deepEqual(startCalls, [5]);
+  assert.equal(stopCalls.length, 1);
+  assert.ok(Math.abs(stopCalls[0] - 5.2) < 0.00001);
+  assert.equal(connectTargets.length, 2);
+  assert.equal(closed, true);
 });
 
 test('normalizeBinaryPayload converts binary-like values into Uint8Array for JSZip', async () => {
