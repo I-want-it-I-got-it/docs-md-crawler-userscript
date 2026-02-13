@@ -45,11 +45,20 @@ test('isDocUrl allows same-origin article links and still filters excluded/stati
 });
 
 test('parseLinksFromDocument skips footer links and keeps main content links', () => {
+  const categorySection = {
+    querySelector(selector) {
+      if (selector === 'h1,h2,h3,h4,h5,h6,[data-title],.title,[class*="title" i]') {
+        return { textContent: 'Categories' };
+      }
+      return null;
+    }
+  };
   const mainAnchors = [
     {
       getAttribute(name) {
         return name === 'href' ? '/blog/a' : '';
       },
+      textContent: 'Claude Agent Skills Complete Guide',
       closest() {
         return null;
       }
@@ -58,14 +67,31 @@ test('parseLinksFromDocument skips footer links and keeps main content links', (
       getAttribute(name) {
         return name === 'href' ? '/blog/footer-c' : '';
       },
-      closest() {
-        return { tagName: 'FOOTER' };
+      textContent: 'Contact',
+      closest(selector) {
+        if (selector === 'nav,[role="navigation"],header,[role="banner"],footer,[role="contentinfo"],aside,.menu,.navbar,.site-nav,.site-menu,.top-nav') {
+          return { tagName: 'NAV' };
+        }
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/categories/ai-agents' : '';
+      },
+      textContent: 'AI Agents',
+      closest(selector) {
+        if (selector === 'section,div,aside,nav') {
+          return categorySection;
+        }
+        return null;
       }
     },
     {
       getAttribute(name) {
         return name === 'href' ? '/blog/b' : '';
       },
+      textContent: 'Ralph Wiggum AI Loop: The Viral Coding Technique',
       closest() {
         return null;
       }

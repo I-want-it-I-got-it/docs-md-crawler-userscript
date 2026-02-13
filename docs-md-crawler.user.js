@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.9
+// @version      0.2.10
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -1000,6 +1000,80 @@
     return fallback ? [fallback] : [];
   }
 
+  function normalizeAnchorText(value) {
+    return String(value || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  function isNavigationHeadingText(value) {
+    const text = normalizeAnchorText(value);
+    if (!text) {
+      return false;
+    }
+    return text === 'categories' ||
+      text === 'quick links' ||
+      text === 'quicklinks' ||
+      text === 'navigation' ||
+      text === 'menu';
+  }
+
+  function isNavigationAnchorText(value) {
+    const text = normalizeAnchorText(value);
+    if (!text) {
+      return false;
+    }
+    const exactLabels = new Set([
+      'home',
+      'blog',
+      'about',
+      'contact',
+      'privacy',
+      'rss',
+      'terms',
+      'cookies',
+      'login',
+      'sign in',
+      'sign up',
+      'register'
+    ]);
+    if (exactLabels.has(text)) {
+      return true;
+    }
+    return text.startsWith('view all categories');
+  }
+
+  function isNavigationLikeAnchor(anchor, footerSelector) {
+    if (!anchor) {
+      return false;
+    }
+
+    if (typeof anchor.closest === 'function') {
+      const navContainer = anchor.closest(
+        'nav,[role="navigation"],header,[role="banner"],footer,[role="contentinfo"],aside,.menu,.navbar,.site-nav,.site-menu,.top-nav'
+      );
+      if (navContainer) {
+        return true;
+      }
+
+      const footerContainer = anchor.closest(footerSelector);
+      if (footerContainer) {
+        return true;
+      }
+
+      const sectionContainer = anchor.closest('section,div,aside,nav');
+      if (sectionContainer && typeof sectionContainer.querySelector === 'function') {
+        const headingNode = sectionContainer.querySelector('h1,h2,h3,h4,h5,h6,[data-title],.title,[class*="title" i]');
+        if (headingNode && isNavigationHeadingText(headingNode.textContent || '')) {
+          return true;
+        }
+      }
+    }
+
+    return isNavigationAnchorText(anchor.textContent || '');
+  }
+
   function parseLinksFromDocument(doc, baseUrl, options) {
     const opts = options || {};
     const preferContentScopes = opts.preferContentScopes !== false;
@@ -1014,7 +1088,7 @@
     const scopes = getLinkScopeNodes(doc, preferContentScopes);
     scopes.forEach((scope) => {
       scope.querySelectorAll('a[href]').forEach((a) => {
-        if (skipFooterLinks && typeof a.closest === 'function' && a.closest(footerSelector)) {
+        if (skipFooterLinks && isNavigationLikeAnchor(a, footerSelector)) {
           return;
         }
         const raw = a.getAttribute('href');
