@@ -231,6 +231,24 @@ test('computeStageProgress calculates bounded stage percentage', () => {
   assert.deepEqual(crawler.computeStageProgress(0, 0), { completed: 0, total: 0, percent: 100 });
 });
 
+test('buildStageProgressText keeps ZIP stage as percentage-only text', () => {
+  assert.equal(
+    crawler.buildStageProgressText('ZIP打包', 40, 100),
+    'ZIP打包: 40%'
+  );
+  assert.equal(
+    crawler.buildStageProgressText('Markdown转换', 3, 10),
+    'Markdown转换: 3/10 (30%)'
+  );
+});
+
+test('normalizeImageMode supports external/local/none and falls back to default', () => {
+  assert.equal(crawler.normalizeImageMode('external'), 'external');
+  assert.equal(crawler.normalizeImageMode('local'), 'local');
+  assert.equal(crawler.normalizeImageMode('none'), 'none');
+  assert.equal(crawler.normalizeImageMode('unexpected'), 'external');
+});
+
 test('computeZipPackProgress converts JSZip metadata percent to 0-100 stage progress', () => {
   assert.deepEqual(
     crawler.computeZipPackProgress({ percent: 0 }),
@@ -460,7 +478,7 @@ test('buildUiStyles provides shadcn-style tokens and button variants', () => {
   assert.match(css, /\.docs-md-btn-primary\{/);
   assert.match(css, /\.docs-md-btn-outline\{/);
   assert.match(css, /\.docs-md-surface\{/);
-  assert.match(css, /\.docs-md-switch\{/);
+  assert.match(css, /\.docs-md-image-select\{/);
   assert.match(css, /\.docs-md-fail-link\{/);
   assert.match(css, /text-decoration-style:dashed/);
   assert.match(css, /\.docs-md-square-check\{/);
@@ -468,32 +486,41 @@ test('buildUiStyles provides shadcn-style tokens and button variants', () => {
   assert.match(css, /\.docs-md-square-check:indeterminate::before/);
   assert.match(css, /\.docs-md-square-check:checked\{border-color:hsl\(0 0% 0%\);background:hsl\(0 0% 0%\)/);
   assert.match(css, /\.docs-md-square-check:indeterminate\{border-color:hsl\(0 0% 0%\);background:hsl\(0 0% 0%\)/);
+  assert.match(css, /\.docs-md-square-check\{[^}]*width:16px;height:16px/);
   assert.match(css, /\.docs-md-group-separator\{/);
   assert.match(css, /\.docs-md-inline-field\{/);
-  assert.match(css, /#docs-md-diag-wrap\{/);
-  assert.match(css, /#docs-md-diag\{/);
-  assert.match(css, /#docs-md-diag-clear\{/);
+  assert.match(css, /\.docs-md-image-select\{/);
+  assert.doesNotMatch(css, /#docs-md-diag-wrap\{/);
+  assert.doesNotMatch(css, /#docs-md-diag\{/);
+  assert.doesNotMatch(css, /#docs-md-diag-clear\{/);
+  assert.doesNotMatch(css, /#docs-md-download-wrap\{/);
+  assert.doesNotMatch(css, /#docs-md-download-link\{/);
 });
 
 test('buildPanelMarkup keeps required ids and shadcn-style structure', () => {
   const html = crawler.buildPanelMarkup();
   assert.match(html, /id="docs-md-head"/);
   assert.match(html, /id="docs-md-image-mode"/);
-  assert.match(html, /id="docs-md-image-mode" type="checkbox"/);
-  assert.doesNotMatch(html, /<select id="docs-md-image-mode"/);
+  assert.match(html, /<select id="docs-md-image-mode" class="docs-md-image-select"/);
+  assert.match(html, /<option value="external">外链插入<\/option>/);
+  assert.match(html, /<option value="local">本地下载<\/option>/);
+  assert.match(html, /<option value="none">不导出<\/option>/);
+  assert.doesNotMatch(html, /id="docs-md-image-mode" type="checkbox"/);
   assert.match(html, /class="docs-md-field docs-md-inline-field"/);
   assert.match(html, /id="docs-md-scan"/);
   assert.match(html, /id="docs-md-export"/);
   assert.match(html, /id="docs-md-stop"/);
   assert.match(html, /id="docs-md-status-text"/);
   assert.match(html, /id="docs-md-tree"/);
+  assert.match(html, /id="docs-md-progress-text">导出进度: 0%<\/div>/);
   assert.match(html, /docs-md-btn docs-md-btn-primary/);
   assert.match(html, /docs-md-btn docs-md-btn-outline/);
   assert.match(html, /docs-md-btn-export/);
   assert.match(html, /docs-md-surface/);
-  assert.match(html, /id="docs-md-diag-wrap"/);
-  assert.match(html, /id="docs-md-diag"/);
-  assert.match(html, /id="docs-md-diag-clear"/);
+  assert.doesNotMatch(html, /id="docs-md-diag-wrap"/);
+  assert.doesNotMatch(html, /id="docs-md-diag"/);
+  assert.doesNotMatch(html, /id="docs-md-diag-clear"/);
+  assert.doesNotMatch(html, /手动下载 ZIP/);
   assert.match(html, /id="docs-md-check-all-wrap"/);
   assert.match(html, /docs-md-check-row docs-md-hidden/);
   assert.match(html, /id="docs-md-check-all" type="checkbox" class="docs-md-square-check docs-md-group-check" checked/);
