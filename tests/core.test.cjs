@@ -44,15 +44,7 @@ test('isDocUrl allows same-origin article links and still filters excluded/stati
   );
 });
 
-test('parseLinksFromDocument skips footer links and keeps main content links', () => {
-  const categorySection = {
-    querySelector(selector) {
-      if (selector === 'h1,h2,h3,h4,h5,h6,[data-title],.title,[class*="title" i]') {
-        return { textContent: 'Categories' };
-      }
-      return null;
-    }
-  };
+test('parseLinksFromDocument skips nav/footer links and keeps main scope links', () => {
   const mainAnchors = [
     {
       getAttribute(name) {
@@ -80,10 +72,7 @@ test('parseLinksFromDocument skips footer links and keeps main content links', (
         return name === 'href' ? '/categories/ai-agents' : '';
       },
       textContent: 'AI Agents',
-      closest(selector) {
-        if (selector === 'section,div,aside,nav') {
-          return categorySection;
-        }
+      closest() {
         return null;
       }
     },
@@ -117,7 +106,36 @@ test('parseLinksFromDocument skips footer links and keeps main content links', (
   };
 
   const links = crawler.parseLinksFromDocument(mockDoc, 'https://example.com/categories/ai-agents/');
-  assert.deepEqual(links, ['https://example.com/blog/a', 'https://example.com/blog/b']);
+  assert.deepEqual(links, [
+    'https://example.com/blog/a',
+    'https://example.com/categories/ai-agents',
+    'https://example.com/blog/b'
+  ]);
+});
+
+test('inferDocRootPrefixes prefers article roots over generic category roots', () => {
+  const roots = crawler.inferDocRootPrefixes(
+    'https://example.com/categories/ai-agents',
+    [
+      'https://example.com/blog/post-a',
+      'https://example.com/blog/post-b',
+      'https://example.com/categories/tools'
+    ],
+    [
+      'https://example.com/blog/post-c',
+      'https://example.com/blog/post-d',
+      'https://example.com/tag/llm'
+    ],
+    'https://example.com'
+  );
+  assert.deepEqual(roots, ['blog']);
+});
+
+test('isLikelyDocUrlByStructure filters nav/list paths and keeps article-like paths', () => {
+  assert.equal(crawler.isLikelyDocUrlByStructure('https://example.com/blog/how-to-build-agents'), true);
+  assert.equal(crawler.isLikelyDocUrlByStructure('https://example.com/blog/page/2'), false);
+  assert.equal(crawler.isLikelyDocUrlByStructure('https://example.com/categories/ai-agents'), false);
+  assert.equal(crawler.isLikelyDocUrlByStructure('https://example.com/contact'), false);
 });
 
 test('buildMarkdownPath uses url segment + title and resolves collisions', () => {

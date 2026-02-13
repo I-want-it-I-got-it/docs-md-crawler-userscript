@@ -1000,50 +1000,6 @@
     return fallback ? [fallback] : [];
   }
 
-  function normalizeAnchorText(value) {
-    return String(value || '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  }
-
-  function isNavigationHeadingText(value) {
-    const text = normalizeAnchorText(value);
-    if (!text) {
-      return false;
-    }
-    return text === 'categories' ||
-      text === 'quick links' ||
-      text === 'quicklinks' ||
-      text === 'navigation' ||
-      text === 'menu';
-  }
-
-  function isNavigationAnchorText(value) {
-    const text = normalizeAnchorText(value);
-    if (!text) {
-      return false;
-    }
-    const exactLabels = new Set([
-      'home',
-      'blog',
-      'about',
-      'contact',
-      'privacy',
-      'rss',
-      'terms',
-      'cookies',
-      'login',
-      'sign in',
-      'sign up',
-      'register'
-    ]);
-    if (exactLabels.has(text)) {
-      return true;
-    }
-    return text.startsWith('view all categories');
-  }
-
   function isNavigationLikeAnchor(anchor, footerSelector) {
     if (!anchor) {
       return false;
@@ -1061,17 +1017,141 @@
       if (footerContainer) {
         return true;
       }
-
-      const sectionContainer = anchor.closest('section,div,aside,nav');
-      if (sectionContainer && typeof sectionContainer.querySelector === 'function') {
-        const headingNode = sectionContainer.querySelector('h1,h2,h3,h4,h5,h6,[data-title],.title,[class*="title" i]');
-        if (headingNode && isNavigationHeadingText(headingNode.textContent || '')) {
-          return true;
-        }
-      }
     }
 
-    return isNavigationAnchorText(anchor.textContent || '');
+    return false;
+  }
+
+  function getFirstPathSegment(url) {
+    try {
+      const pathname = new URL(url).pathname;
+      const segments = splitPathSegments(pathname);
+      return segments.length ? segments[0].toLowerCase() : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function inferDocRootPrefixes(startUrl, seedLinks, sitemapUrls, origin) {
+    const genericRoots = new Set([
+      'category',
+      'categories',
+      'tag',
+      'tags',
+      'author',
+      'authors',
+      'page',
+      'pages',
+      'search'
+    ]);
+    const scoreByRoot = new Map();
+    const inputs = [startUrl]
+      .concat(seedLinks || [])
+      .concat(sitemapUrls || []);
+
+    inputs.forEach((rawUrl) => {
+      const normalized = normalizeUrl(rawUrl);
+      if (!normalized) {
+        return;
+      }
+      try {
+        const u = new URL(normalized);
+        if (origin && u.origin !== origin) {
+          return;
+        }
+        const segments = splitPathSegments(u.pathname).map((item) => item.toLowerCase());
+        if (segments.length < 2) {
+          return;
+        }
+        const root = segments[0];
+        if (!root || genericRoots.has(root)) {
+          return;
+        }
+        scoreByRoot.set(root, (scoreByRoot.get(root) || 0) + 1);
+      } catch (_) {
+        // ignore invalid url
+      }
+    });
+
+    if (!scoreByRoot.size) {
+      const startRoot = getFirstPathSegment(startUrl);
+      return startRoot && !genericRoots.has(startRoot) ? [startRoot] : [];
+    }
+
+    let maxScore = 0;
+    scoreByRoot.forEach((score) => {
+      if (score > maxScore) {
+        maxScore = score;
+      }
+    });
+
+    const roots = Array.from(scoreByRoot.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map((entry) => entry[0]);
+    const picked = roots.filter((root) => (scoreByRoot.get(root) || 0) >= Math.max(2, Math.ceil(maxScore * 0.5)));
+    if (picked.length) {
+      return picked;
+    }
+    return roots.slice(0, 1);
+  }
+
+  function matchesDocRootPrefix(url, rootPrefixes) {
+    if (!rootPrefixes || !rootPrefixes.size) {
+      return true;
+    }
+    const root = getFirstPathSegment(url);
+    return rootPrefixes.has(root);
+  }
+
+  function isLikelyDocUrlByStructure(url) {
+    try {
+      const u = new URL(url);
+      const segments = splitPathSegments(u.pathname).map((item) => item.toLowerCase());
+      if (!segments.length) {
+        return false;
+      }
+
+      const first = segments[0];
+      const leaf = segments[segments.length - 1];
+      const blockedSingle = new Set([
+        'home',
+        'about',
+        'contact',
+        'privacy',
+        'terms',
+        'cookies',
+        'rss',
+        'sitemap',
+        'search',
+        'login',
+        'signup',
+        'register'
+      ]);
+      const blockedRoots = new Set(['category', 'categories', 'tag', 'tags', 'author', 'authors']);
+
+      if (blockedRoots.has(first)) {
+        return false;
+      }
+      if (segments.length === 1 && blockedSingle.has(leaf)) {
+        return false;
+      }
+      if (segments.includes('page')) {
+        for (let i = 0; i < segments.length - 1; i += 1) {
+          if (segments[i] === 'page' && /^\d+$/.test(segments[i + 1])) {
+            return false;
+          }
+        }
+      }
+      if (leaf === 'feed' || leaf === 'rss') {
+        return false;
+      }
+      if (segments.length >= 2) {
+        return true;
+      }
+      return leaf.includes('-') && leaf.length >= 12;
+    } catch (_) {
+      return false;
+    }
   }
 
   function parseLinksFromDocument(doc, baseUrl, options) {
@@ -1330,6 +1410,9 @@
     return {
       normalizeUrl,
       parseLinksFromDocument,
+      inferDocRootPrefixes,
+      isLikelyDocUrlByStructure,
+      matchesDocRootPrefix,
       isDocUrl,
       buildMarkdownPath,
       getDisplayTitle,
@@ -2255,48 +2338,71 @@
     return Array.from(found);
   }
 
-  function collectCurrentPageLinks() {
-    const links = [];
-    document.querySelectorAll('a[href]').forEach((a) => {
-      const raw = a.getAttribute('href');
-      if (!raw) return;
-      try {
-        links.push(new URL(raw, location.href).href);
-      } catch (_) {
-        // ignore invalid links
-      }
-    });
-    return links;
-  }
-
   async function discoverUrls(options) {
     const origin = options.origin;
     const startUrl = normalizeUrl(options.startUrl || location.href);
     const maxDepth = options.maxDepth;
     const excludePatterns = options.excludePatterns || [];
     const seedLinks = Array.isArray(options.seedLinks) ? options.seedLinks : [];
+    const useSitemap = options.useSitemap !== false;
+
+    let sitemapUrls = [];
+    if (useSitemap) {
+      try {
+        sitemapUrls = await discoverSitemapUrls(origin);
+      } catch (_) {
+        sitemapUrls = [];
+      }
+    }
+
+    if (sitemapUrls.length) {
+      addDiagnosticLog('SCAN', 'Sitemap 候选: ' + sitemapUrls.length);
+    }
+
+    const inferredRoots = inferDocRootPrefixes(startUrl, seedLinks, sitemapUrls, origin);
+    const docRootPrefixes = new Set(inferredRoots);
+    if (inferredRoots.length) {
+      addDiagnosticLog('SCAN', 'URL 结构前缀: ' + inferredRoots.map((item) => '/' + item + '/').join(', '));
+    }
 
     const discovered = new Set();
     const titles = new Map();
     const visited = new Set();
+    const queued = new Set();
     const queue = [];
     const depthMap = new Map();
 
-    function addUrl(maybeUrl, depth) {
+    function addUrl(maybeUrl, depth, source) {
       const normalized = normalizeUrl(maybeUrl);
       if (!normalized) return;
       if (!isDocUrl(normalized, origin, startUrl, excludePatterns)) return;
-      if (discovered.has(normalized)) return;
-      discovered.add(normalized);
-      queue.push(normalized);
-      depthMap.set(normalized, depth);
+
+      const isDocLike = isLikelyDocUrlByStructure(normalized);
+      const matchesRoot = matchesDocRootPrefix(normalized, docRootPrefixes);
+      const isStart = source === 'start';
+      const shouldCrawl = isStart || matchesRoot || isDocLike;
+      if (!shouldCrawl) {
+        return;
+      }
+
+      if (!queued.has(normalized)) {
+        queued.add(normalized);
+        queue.push(normalized);
+        depthMap.set(normalized, depth);
+      }
+
+      if (isDocLike && matchesRoot && !discovered.has(normalized)) {
+        discovered.add(normalized);
+      }
+
       state.foundCount = discovered.size;
       state.queueCount = queue.length;
       updateProgress();
     }
 
-    addUrl(startUrl, 0);
-    seedLinks.forEach((seedUrl) => addUrl(seedUrl, 1));
+    addUrl(startUrl, 0, 'start');
+    seedLinks.forEach((seedUrl) => addUrl(seedUrl, 1, 'seed'));
+    sitemapUrls.forEach((sitemapUrl) => addUrl(sitemapUrl, 1, 'sitemap'));
 
     while (queue.length) {
       await waitIfPaused();
@@ -2336,7 +2442,7 @@
 
       const links = parseLinksFromHtml(html, current);
       for (const link of links) {
-        addUrl(link, depth + 1);
+        addUrl(link, depth + 1, 'crawl');
       }
 
       await sleep(options.requestDelayMs);
@@ -2461,6 +2567,7 @@
         maxDepth: DEFAULTS.maxDepth,
         excludePatterns: DEFAULT_EXCLUDES,
         seedLinks: visibleLinks,
+        useSitemap: true,
         requestDelayMs: DEFAULTS.requestDelayMs,
         retries: DEFAULTS.retries
       });
