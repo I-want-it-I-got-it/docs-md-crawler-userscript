@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.2
+// @version      0.2.3
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -464,6 +464,7 @@
     }
 
     const timeoutMs = Number(opts.timeoutMs);
+    const saveAs = Boolean(opts.saveAs);
     const boundedTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 12000;
 
     return new Promise((resolve, reject) => {
@@ -489,7 +490,7 @@
         const requestResult = gmDownloadFn({
           url: downloadUrl,
           name: filename,
-          saveAs: true,
+          saveAs,
           onload: function () {
             done(resolve);
           },
@@ -517,6 +518,37 @@
     });
   }
 
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      if (!isBlobValue(blob)) {
+        reject(new Error('blob-dataurl-invalid-blob'));
+        return;
+      }
+      if (typeof FileReader === 'undefined') {
+        reject(new Error('blob-dataurl-file-reader-unavailable'));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = function () {
+        const value = String(reader.result || '');
+        if (!value.startsWith('data:')) {
+          reject(new Error('blob-dataurl-empty'));
+          return;
+        }
+        resolve(value);
+      };
+      reader.onerror = function () {
+        reject(new Error('blob-dataurl-read-fail'));
+      };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function gmDownloadByBlobDataUrl(blob, filename, options) {
+    const dataUrl = await blobToDataUrl(blob);
+    return gmDownloadByUrl(dataUrl, filename, options);
+  }
+
   function anchorDownloadByUrl(downloadUrl, filename) {
     if (typeof document === 'undefined' || !document.body) {
       return Promise.reject(new Error('anchor-download-unavailable'));
@@ -533,7 +565,9 @@
 
   async function triggerZipDownloadByUrl(downloadUrl, filename, deps) {
     const options = deps || {};
+    const blob = options.blob;
     const gmDownloader = typeof options.gmDownloadByUrl === 'function' ? options.gmDownloadByUrl : null;
+    const gmBlobDownloader = typeof options.gmDownloadByBlob === 'function' ? options.gmDownloadByBlob : null;
     const anchorDownloader = typeof options.anchorDownloadByUrl === 'function'
       ? options.anchorDownloadByUrl
       : anchorDownloadByUrl;
@@ -547,6 +581,18 @@
           errorMessage: ''
         };
       } catch (err) {
+        if (gmBlobDownloader && isBlobValue(blob)) {
+          try {
+            await gmBlobDownloader(blob, filename);
+            return {
+              method: 'gm_download_dataurl',
+              usedFallback: true,
+              errorMessage: normalizeErrorMessage(err, 'gm-download-error')
+            };
+          } catch (_) {
+            // continue to anchor fallback
+          }
+        }
         await anchorDownloader(downloadUrl, filename);
         return {
           method: 'anchor',
@@ -2304,10 +2350,19 @@
       let autoDownloadResult = null;
       try {
         autoDownloadResult = await triggerZipDownloadByUrl(downloadUrl, filename, {
+          blob,
           gmDownloadByUrl: typeof GM_download === 'function'
             ? (url, name) => gmDownloadByUrl(url, name, {
               gmDownloadFn: GM_download,
-              timeoutMs: 12000
+              timeoutMs: 12000,
+              saveAs: false
+            })
+            : null,
+          gmDownloadByBlob: typeof GM_download === 'function'
+            ? (blobValue, name) => gmDownloadByBlobDataUrl(blobValue, name, {
+              gmDownloadFn: GM_download,
+              timeoutMs: 12000,
+              saveAs: false
             })
             : null,
           anchorDownloadByUrl
@@ -2317,7 +2372,11 @@
       }
 
       const methodSuffix = autoDownloadResult
-        ? (autoDownloadResult.usedFallback ? '（自动回退浏览器下载）' : (autoDownloadResult.method === 'gm_download' ? '（Tampermonkey 下载）' : '（浏览器下载）'))
+        ? (autoDownloadResult.method === 'gm_download'
+          ? '（Tampermonkey 下载）'
+          : (autoDownloadResult.method === 'gm_download_dataurl'
+            ? '（Tampermonkey data-url 回退）'
+            : (autoDownloadResult.usedFallback ? '（自动回退浏览器下载）' : '（浏览器下载）')))
         : '（需手动下载）';
       updateProgress('导出完成: ' + state.doneCount + ' 页 ' + methodSuffix + '，若未弹出下载请点击“手动下载 ZIP”');
       exportSucceeded = true;

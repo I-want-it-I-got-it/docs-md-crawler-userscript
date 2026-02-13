@@ -193,6 +193,32 @@ test('triggerZipDownloadByUrl falls back to anchor when GM download fails', asyn
   assert.equal(result.errorMessage, 'not_whitelisted');
 });
 
+test('triggerZipDownloadByUrl retries with blob downloader before anchor fallback', async () => {
+  const calls = [];
+  const fakeBlob = new Blob([Uint8Array.from([80, 75, 3, 4])], { type: 'application/zip' });
+  const result = await crawler.triggerZipDownloadByUrl('blob:zip-3', 'demo.zip', {
+    blob: fakeBlob,
+    gmDownloadByUrl: async () => {
+      calls.push(['gm-url']);
+      throw new Error('blob-url-blocked');
+    },
+    gmDownloadByBlob: async (blob, name) => {
+      calls.push(['gm-blob', blob.size, name]);
+    },
+    anchorDownloadByUrl: async (url, name) => {
+      calls.push(['anchor', url, name]);
+    }
+  });
+
+  assert.deepEqual(calls, [
+    ['gm-url'],
+    ['gm-blob', 4, 'demo.zip']
+  ]);
+  assert.equal(result.method, 'gm_download_dataurl');
+  assert.equal(result.usedFallback, true);
+  assert.equal(result.errorMessage, 'blob-url-blocked');
+});
+
 test('normalizeBinaryPayload converts binary-like values into Uint8Array for JSZip', async () => {
   const fromArrayBuffer = await crawler.normalizeBinaryPayload(Uint8Array.from([1, 2, 3]).buffer);
   assert.ok(fromArrayBuffer instanceof Uint8Array);
