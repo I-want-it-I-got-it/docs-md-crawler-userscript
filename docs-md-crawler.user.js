@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.8
+// @version      0.2.9
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -972,19 +972,64 @@
     return parseLinksFromDocument(doc, baseUrl);
   }
 
-  function parseLinksFromDocument(doc, baseUrl) {
+  function getLinkScopeNodes(doc, preferContentScopes) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') {
+      return [];
+    }
+    const scopes = [];
+    const seen = new Set();
+    const selectors = ['main', 'article', '[role="main"]', '.content', '.docs-content', '.markdown-body', '#content', '#main'];
+
+    if (preferContentScopes) {
+      selectors.forEach((selector) => {
+        doc.querySelectorAll(selector).forEach((node) => {
+          if (!node || seen.has(node)) {
+            return;
+          }
+          seen.add(node);
+          scopes.push(node);
+        });
+      });
+    }
+
+    if (scopes.length) {
+      return scopes;
+    }
+
+    const fallback = doc.body || doc.documentElement;
+    return fallback ? [fallback] : [];
+  }
+
+  function parseLinksFromDocument(doc, baseUrl, options) {
+    const opts = options || {};
+    const preferContentScopes = opts.preferContentScopes !== false;
+    const skipFooterLinks = opts.skipFooterLinks !== false;
+    const footerSelector = 'footer,[role="contentinfo"],#footer,.footer,.site-footer,[id*="footer" i],[class*="footer" i]';
     const links = [];
+    const unique = new Set();
     if (!doc || typeof doc.querySelectorAll !== 'function') {
       return links;
     }
-    doc.querySelectorAll('a[href]').forEach((a) => {
-      const raw = a.getAttribute('href');
-      if (!raw) return;
-      try {
-        links.push(new URL(raw, baseUrl).href);
-      } catch (_) {
-        // ignore invalid URL
-      }
+
+    const scopes = getLinkScopeNodes(doc, preferContentScopes);
+    scopes.forEach((scope) => {
+      scope.querySelectorAll('a[href]').forEach((a) => {
+        if (skipFooterLinks && typeof a.closest === 'function' && a.closest(footerSelector)) {
+          return;
+        }
+        const raw = a.getAttribute('href');
+        if (!raw) return;
+        try {
+          const absolute = new URL(raw, baseUrl).href;
+          if (unique.has(absolute)) {
+            return;
+          }
+          unique.add(absolute);
+          links.push(absolute);
+        } catch (_) {
+          // ignore invalid URL
+        }
+      });
     });
     return links;
   }
@@ -1210,6 +1255,7 @@
   if (env.isNode) {
     return {
       normalizeUrl,
+      parseLinksFromDocument,
       isDocUrl,
       buildMarkdownPath,
       getDisplayTitle,

@@ -44,6 +44,56 @@ test('isDocUrl allows same-origin article links and still filters excluded/stati
   );
 });
 
+test('parseLinksFromDocument skips footer links and keeps main content links', () => {
+  const mainAnchors = [
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/blog/a' : '';
+      },
+      closest() {
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/blog/footer-c' : '';
+      },
+      closest() {
+        return { tagName: 'FOOTER' };
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/blog/b' : '';
+      },
+      closest() {
+        return null;
+      }
+    }
+  ];
+  const mainScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? mainAnchors : [];
+    }
+  };
+  const mockDoc = {
+    body: {
+      querySelectorAll() {
+        return [];
+      }
+    },
+    querySelectorAll(selector) {
+      if (selector === 'main') {
+        return [mainScope];
+      }
+      return [];
+    }
+  };
+
+  const links = crawler.parseLinksFromDocument(mockDoc, 'https://example.com/categories/ai-agents/');
+  assert.deepEqual(links, ['https://example.com/blog/a', 'https://example.com/blog/b']);
+});
+
 test('buildMarkdownPath uses url segment + title and resolves collisions', () => {
   const used = new Set();
   const a = crawler.buildMarkdownPath('https://example.com/docs/guide/install', '安装指南', '/docs', used);
