@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.7
+// @version      0.2.8
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -78,14 +78,6 @@
         return false;
       }
       if (u.origin !== origin) {
-        return false;
-      }
-      const normalizedBase = normalizeUrl(baseUrl);
-      if (!normalizedBase) {
-        return false;
-      }
-      const base = new URL(normalizedBase);
-      if (!pathStartsWithRoot(u.pathname, base.pathname)) {
         return false;
       }
       const full = (u.pathname + u.search).toLowerCase();
@@ -977,7 +969,14 @@
 
   function parseLinksFromHtml(html, baseUrl) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
+    return parseLinksFromDocument(doc, baseUrl);
+  }
+
+  function parseLinksFromDocument(doc, baseUrl) {
     const links = [];
+    if (!doc || typeof doc.querySelectorAll !== 'function') {
+      return links;
+    }
     doc.querySelectorAll('a[href]').forEach((a) => {
       const raw = a.getAttribute('href');
       if (!raw) return;
@@ -988,6 +987,13 @@
       }
     });
     return links;
+  }
+
+  function collectVisibleLinksFromCurrentPage(baseUrl) {
+    if (typeof document === 'undefined') {
+      return [];
+    }
+    return parseLinksFromDocument(document, baseUrl);
   }
 
   function extractDocTitle(doc, fallbackUrl) {
@@ -2148,6 +2154,7 @@
     const startUrl = normalizeUrl(options.startUrl || location.href);
     const maxDepth = options.maxDepth;
     const excludePatterns = options.excludePatterns || [];
+    const seedLinks = Array.isArray(options.seedLinks) ? options.seedLinks : [];
 
     const discovered = new Set();
     const titles = new Map();
@@ -2169,6 +2176,7 @@
     }
 
     addUrl(startUrl, 0);
+    seedLinks.forEach((seedUrl) => addUrl(seedUrl, 1));
 
     while (queue.length) {
       await waitIfPaused();
@@ -2293,10 +2301,12 @@
     }
 
     const startUrl = normalizeUrl(location.href) || location.href;
+    const visibleLinks = collectVisibleLinksFromCurrentPage(startUrl);
     state.scanStartUrl = startUrl;
     resetExportProgress();
     clearDiagnosticLogs();
     addDiagnosticLog('SCAN', '开始扫描，起始地址: ' + startUrl);
+    addDiagnosticLog('SCAN', '当前页面可见链接: ' + visibleLinks.length);
 
     state.scanning = true;
     resetPauseState();
@@ -2330,6 +2340,7 @@
         startUrl,
         maxDepth: DEFAULTS.maxDepth,
         excludePatterns: DEFAULT_EXCLUDES,
+        seedLinks: visibleLinks,
         requestDelayMs: DEFAULTS.requestDelayMs,
         retries: DEFAULTS.retries
       });

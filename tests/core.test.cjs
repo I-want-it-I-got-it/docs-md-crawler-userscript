@@ -15,7 +15,7 @@ test('normalizeUrl strips hash and normalizes trailing slash', () => {
   assert.equal(crawler.normalizeUrl('https://example.com/'), 'https://example.com/');
 });
 
-test('isDocUrl keeps same-origin descendants under current page url', () => {
+test('isDocUrl allows same-origin article links and still filters excluded/static URLs', () => {
   const excludePatterns = ['/api/', '/login'];
   const baseUrl = 'https://example.com/docs/start';
   assert.equal(
@@ -28,7 +28,7 @@ test('isDocUrl keeps same-origin descendants under current page url', () => {
   );
   assert.equal(
     crawler.isDocUrl('https://example.com/docs/other', 'https://example.com', baseUrl, excludePatterns),
-    false
+    true
   );
   assert.equal(
     crawler.isDocUrl('https://foo.com/docs/start', 'https://example.com', baseUrl, excludePatterns),
@@ -36,6 +36,10 @@ test('isDocUrl keeps same-origin descendants under current page url', () => {
   );
   assert.equal(
     crawler.isDocUrl('https://example.com/docs/start/api/users', 'https://example.com', baseUrl, excludePatterns),
+    false
+  );
+  assert.equal(
+    crawler.isDocUrl('https://example.com/assets/logo.png', 'https://example.com', baseUrl, excludePatterns),
     false
   );
 });
