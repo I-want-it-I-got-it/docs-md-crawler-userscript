@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.5
+// @version      0.2.6
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -33,7 +33,7 @@
     timeoutMs: 15000,
     retries: 2,
     imageMode: 'local',
-    zipPackTimeoutMs: 20000
+    zipPackTimeoutMs: 120000
   };
   const EXPORT_BUTTON_IDLE_TEXT = '导出 ZIP';
   const EXPORT_STAGE_SEQUENCE = ['页面抓取', 'Markdown转换', '图片下载', 'ZIP打包'];
@@ -388,6 +388,20 @@
     return mentionsBlobType && mentionsUnsupported;
   }
 
+  function isLikelyUint8ArraySupportError(err) {
+    const message = String((err && err.message) || '').toLowerCase();
+    if (!message) {
+      return false;
+    }
+    const mentionsUint8Type = message.includes('uint8array') ||
+      message.includes('typed array') ||
+      message.includes('arraybuffer');
+    const mentionsUnsupported = message.includes('unsupported') ||
+      message.includes('not support') ||
+      message.includes('invalid');
+    return mentionsUint8Type && mentionsUnsupported;
+  }
+
   function toZipBlob(payload) {
     if (isBlobValue(payload)) {
       return payload;
@@ -418,33 +432,46 @@
     const opts = options || {};
     const timeoutMs = Number(opts.timeoutMs) || DEFAULTS.zipPackTimeoutMs;
     const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : undefined;
+    const primaryType = opts.primaryType === 'blob' ? 'blob' : 'uint8array';
+    const fallbackType = primaryType === 'uint8array' ? 'blob' : 'uint8array';
+    const primaryTimeoutError = 'zip-pack-timeout';
+    const fallbackTimeoutError = 'zip-pack-fallback-timeout';
 
     try {
-      const blob = await withTimeout(
-        zip.generateAsync({ type: 'blob' }, onProgress),
+      const primaryPayload = await withTimeout(
+        zip.generateAsync({ type: primaryType }, onProgress),
         timeoutMs,
-        'zip-pack-timeout'
+        primaryTimeoutError
       );
       return {
-        blob,
+        blob: toZipBlob(primaryPayload),
         fallbackUsed: false,
-        timeoutTriggered: false
+        timeoutTriggered: false,
+        primaryType
       };
     } catch (err) {
-      const timeoutTriggered = err && err.message === 'zip-pack-timeout';
-      if (!timeoutTriggered && !isLikelyBlobSupportError(err)) {
+      const timeoutTriggered = err && err.message === primaryTimeoutError;
+      if (timeoutTriggered) {
+        throw err;
+      }
+      const supportError = primaryType === 'blob'
+        ? isLikelyBlobSupportError(err)
+        : isLikelyUint8ArraySupportError(err);
+      if (!supportError) {
         throw err;
       }
 
-      const bytes = await withTimeout(
-        zip.generateAsync({ type: 'uint8array' }, onProgress),
+      const fallbackPayload = await withTimeout(
+        zip.generateAsync({ type: fallbackType }, onProgress),
         timeoutMs,
-        'zip-pack-fallback-timeout'
+        fallbackTimeoutError
       );
       return {
-        blob: toZipBlob(bytes),
+        blob: toZipBlob(fallbackPayload),
         fallbackUsed: true,
-        timeoutTriggered
+        timeoutTriggered: false,
+        primaryType,
+        fallbackType
       };
     }
   }
@@ -2430,9 +2457,13 @@
       }
 
       updateExportStage('ZIP打包', 0, 100);
-      addDiagnosticLog('ZIP', '开始生成 ZIP');
+      addDiagnosticLog(
+        'ZIP',
+        '开始生成 ZIP（主通道 uint8array，超时 ' + DEFAULTS.zipPackTimeoutMs + 'ms）'
+      );
       const zipPack = await generateZipBlobWithFallback(zip, {
         timeoutMs: DEFAULTS.zipPackTimeoutMs,
+        primaryType: 'uint8array',
         onProgress: (metadata) => {
           const progress = computeZipPackProgress(metadata);
           updateExportStage('ZIP打包', progress.completed, progress.total);
@@ -2441,15 +2472,11 @@
       if (zipPack.fallbackUsed) {
         addDiagnosticLog(
           'ZIP',
-          zipPack.timeoutTriggered
-            ? 'blob 通道超时，已切换 uint8array 回退'
-            : 'blob 通道不兼容，已切换 uint8array 回退'
+          'uint8array 通道不兼容，已切换 blob 回退'
         );
-        setStatus(zipPack.timeoutTriggered
-          ? 'ZIP 打包主通道超时，已自动切换兼容模式'
-          : 'ZIP 打包主通道不兼容，已自动切换兼容模式');
+        setStatus('ZIP 打包主通道不兼容，已自动切换兼容模式');
       } else {
-        addDiagnosticLog('ZIP', 'blob 通道生成完成');
+        addDiagnosticLog('ZIP', 'uint8array 通道生成完成');
       }
       const blob = zipPack.blob;
       updateExportStage('ZIP打包', 100, 100);
@@ -2499,9 +2526,9 @@
     } catch (err) {
       const errMessage = err && err.message ? err.message : 'unknown';
       if (errMessage === 'zip-pack-timeout') {
-        setStatus('导出失败: ZIP 打包超时（主通道）');
+        setStatus('导出失败: ZIP 打包超时（主通道 uint8array）');
       } else if (errMessage === 'zip-pack-fallback-timeout') {
-        setStatus('导出失败: ZIP 打包超时（回退通道）');
+        setStatus('导出失败: ZIP 打包超时（回退通道 blob）');
       } else {
         setStatus('导出失败: ' + errMessage);
       }
