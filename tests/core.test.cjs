@@ -138,6 +138,21 @@ test('isLikelyDocUrlByStructure filters nav/list paths and keeps article-like pa
   assert.equal(crawler.isLikelyDocUrlByStructure('https://example.com/contact'), false);
 });
 
+test('shouldExpandLinksFromPage skips expanding links on article pages by default', () => {
+  assert.equal(
+    crawler.shouldExpandLinksFromPage('https://example.com/blog/how-to-build-agents'),
+    false
+  );
+  assert.equal(
+    crawler.shouldExpandLinksFromPage('https://example.com/categories/ai-agents'),
+    true
+  );
+  assert.equal(
+    crawler.shouldExpandLinksFromPage('https://example.com/blog/how-to-build-agents', { followLinksInsideArticle: true }),
+    true
+  );
+});
+
 test('buildMarkdownPath uses url segment + title and resolves collisions', () => {
   const used = new Set();
   const a = crawler.buildMarkdownPath('https://example.com/docs/guide/install', '安装指南', '/docs', used);

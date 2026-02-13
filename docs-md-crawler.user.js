@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.11
+// @version      0.2.12
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -1154,6 +1154,14 @@
     }
   }
 
+  function shouldExpandLinksFromPage(url, options) {
+    const opts = options || {};
+    if (opts.followLinksInsideArticle === true) {
+      return true;
+    }
+    return !isLikelyDocUrlByStructure(url);
+  }
+
   function parseLinksFromDocument(doc, baseUrl, options) {
     const opts = options || {};
     const preferContentScopes = opts.preferContentScopes !== false;
@@ -1413,6 +1421,7 @@
       inferDocRootPrefixes,
       isLikelyDocUrlByStructure,
       matchesDocRootPrefix,
+      shouldExpandLinksFromPage,
       isDocUrl,
       buildMarkdownPath,
       getDisplayTitle,
@@ -2346,6 +2355,7 @@
     const seedLinks = Array.isArray(options.seedLinks) ? options.seedLinks : [];
     const crawlDescendantsOnly = options.crawlDescendantsOnly !== false;
     const useSitemap = options.useSitemap === true && !crawlDescendantsOnly;
+    const followLinksInsideArticle = options.followLinksInsideArticle === true;
 
     let sitemapUrls = [];
     if (useSitemap) {
@@ -2447,9 +2457,14 @@
         // keep fallback title
       }
 
-      const links = parseLinksFromHtml(html, current);
-      for (const link of links) {
-        addUrl(link, depth + 1, 'crawl');
+      const shouldExpand = shouldExpandLinksFromPage(current, {
+        followLinksInsideArticle
+      });
+      if (shouldExpand) {
+        const links = parseLinksFromHtml(html, current);
+        for (const link of links) {
+          addUrl(link, depth + 1, 'crawl');
+        }
       }
 
       await sleep(options.requestDelayMs);
@@ -2541,6 +2556,7 @@
     addDiagnosticLog('SCAN', '开始扫描，起始地址: ' + startUrl);
     addDiagnosticLog('SCAN', '当前页面可见链接: ' + visibleLinks.length);
     addDiagnosticLog('SCAN', '扫描策略: 仅递归当前页面可达子链接（不启用 sitemap 全站扩展）');
+    addDiagnosticLog('SCAN', '链接扩展: 默认不跟进文章页正文内链接');
 
     state.scanning = true;
     resetPauseState();
@@ -2577,6 +2593,7 @@
         seedLinks: visibleLinks,
         crawlDescendantsOnly: true,
         useSitemap: false,
+        followLinksInsideArticle: false,
         requestDelayMs: DEFAULTS.requestDelayMs,
         retries: DEFAULTS.retries
       });
