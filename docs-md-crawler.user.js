@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.4
+// @version      0.2.5
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -37,6 +37,7 @@
   };
   const EXPORT_BUTTON_IDLE_TEXT = '导出 ZIP';
   const EXPORT_STAGE_SEQUENCE = ['页面抓取', 'Markdown转换', '图片下载', 'ZIP打包'];
+  const DIAG_MAX_LINES = 80;
 
   function normalizeRootPath(raw) {
     let root = String(raw || '/').trim();
@@ -936,6 +937,12 @@
       '#docs-md-download-link{display:inline-flex;align-items:center;justify-content:center;min-height:30px;padding:0 12px;border-radius:10px;border:1px solid hsl(var(--border));background:hsl(var(--background));color:hsl(var(--foreground));font-size:12px;font-weight:700;text-decoration:none;cursor:pointer;transition:background .16s ease,border-color .16s ease}',
       '#docs-md-download-link:hover{background:hsl(var(--secondary));border-color:hsl(var(--input))}',
       '#docs-md-download-link:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px}',
+      '#docs-md-diag-wrap{display:flex;flex-direction:column;gap:6px;padding:8px 10px}',
+      '#docs-md-diag-head{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;color:hsl(var(--muted-foreground));letter-spacing:.02em}',
+      '#docs-md-diag-clear{border:1px solid hsl(var(--border));background:hsl(var(--background));color:hsl(var(--muted-foreground));border-radius:8px;padding:2px 8px;font-size:11px;cursor:pointer;transition:background .16s ease,border-color .16s ease,color .16s ease}',
+      '#docs-md-diag-clear:hover{background:hsl(var(--secondary));color:hsl(var(--foreground));border-color:hsl(var(--input))}',
+      '#docs-md-diag-clear:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px}',
+      '#docs-md-diag{margin:0;padding:8px;border:1px dashed hsl(var(--border));border-radius:10px;background:hsl(var(--background));color:hsl(var(--muted-foreground));font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;max-height:118px;overflow:auto;white-space:pre-wrap;word-break:break-word}',
       '.docs-md-fail-link{appearance:none;border:0;background:transparent;padding:0;font:inherit;color:hsl(var(--destructive));text-decoration-line:underline;text-decoration-style:dashed;text-decoration-thickness:1px;text-underline-offset:2px;cursor:pointer}',
       '.docs-md-fail-link:hover{color:hsl(var(--destructive) / .86)}',
       '.docs-md-fail-link:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:2px;border-radius:3px}',
@@ -1003,6 +1010,10 @@
       '    <div id="docs-md-usage"></div>',
       '    <div id="docs-md-download-wrap"><a id="docs-md-download-link" href="#" download>手动下载 ZIP</a></div>',
       '  </div>',
+      '  <div id="docs-md-diag-wrap" class="docs-md-surface">',
+      '    <div id="docs-md-diag-head"><span>运行时诊断</span><button id="docs-md-diag-clear" type="button">清空</button></div>',
+      '    <pre id="docs-md-diag">等待任务开始...</pre>',
+      '  </div>',
       '  <label id="docs-md-check-all-wrap" class="docs-md-check-row docs-md-hidden"><input id="docs-md-check-all" type="checkbox" class="docs-md-square-check docs-md-group-check" checked>全选</label>',
       '  <div id="docs-md-tree" class="docs-md-surface docs-md-hidden"></div>',
       '</div>'
@@ -1056,6 +1067,7 @@
     scanSuccessTimer: 0,
     exportSuccessTimer: 0,
     downloadObjectUrl: '',
+    diagnostics: [],
     elements: {},
     scanSession: 0
   };
@@ -1104,6 +1116,9 @@
       usageText: panel.querySelector('#docs-md-usage'),
       downloadWrap: panel.querySelector('#docs-md-download-wrap'),
       downloadLink: panel.querySelector('#docs-md-download-link'),
+      diagWrap: panel.querySelector('#docs-md-diag-wrap'),
+      diagText: panel.querySelector('#docs-md-diag'),
+      diagClearBtn: panel.querySelector('#docs-md-diag-clear'),
       tree: panel.querySelector('#docs-md-tree'),
       checkAllWrap: panel.querySelector('#docs-md-check-all-wrap'),
       checkAll: panel.querySelector('#docs-md-check-all')
@@ -1162,8 +1177,15 @@
       renderFailedQueue();
     });
 
+    if (state.elements.diagClearBtn) {
+      state.elements.diagClearBtn.addEventListener('click', () => {
+        clearDiagnosticLogs();
+      });
+    }
+
     updateFailToggle();
     renderFailedQueue();
+    clearDiagnosticLogs();
     setSelectAllVisible(false);
     setTreeVisible(false);
     setExportButtonBusy(false);
@@ -1502,6 +1524,7 @@
     state.pauseRequested = true;
     setStopButtonState();
     setStatus('已请求停止，等待当前任务暂停...');
+    addDiagnosticLog('CTRL', '已请求停止，等待当前任务暂停');
   }
 
   function resumeCurrentTask() {
@@ -1516,6 +1539,7 @@
     flushPauseResolvers();
     setStopButtonState();
     setStatus('继续当前任务...');
+    addDiagnosticLog('CTRL', '继续当前任务');
   }
 
   async function waitIfPaused() {
@@ -1530,6 +1554,7 @@
       }
       setStopButtonState();
       setStatus('任务已停止，点击“继续”恢复');
+      addDiagnosticLog('CTRL', '任务已暂停，等待继续');
     }
     if (!state.paused) {
       return;
@@ -1550,6 +1575,45 @@
 
   function updateUsageText(stats) {
     state.elements.usageText.innerHTML = buildUsageStatsMarkup(stats);
+  }
+
+  function formatDiagnosticTime(now) {
+    const date = now instanceof Date ? now : new Date();
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    const ss = String(date.getSeconds()).padStart(2, '0');
+    return hh + ':' + mm + ':' + ss;
+  }
+
+  function renderDiagnosticLogs() {
+    if (!state.elements.diagText) {
+      return;
+    }
+    if (!state.diagnostics.length) {
+      state.elements.diagText.textContent = '等待任务开始...';
+      return;
+    }
+    state.elements.diagText.textContent = state.diagnostics.join('\n');
+    state.elements.diagText.scrollTop = state.elements.diagText.scrollHeight;
+  }
+
+  function clearDiagnosticLogs() {
+    state.diagnostics = [];
+    renderDiagnosticLogs();
+  }
+
+  function addDiagnosticLog(tag, message) {
+    const line = '[' + formatDiagnosticTime() + '] [' + String(tag || 'INFO') + '] ' + String(message || '');
+    state.diagnostics.push(line);
+    if (state.diagnostics.length > DIAG_MAX_LINES) {
+      state.diagnostics = state.diagnostics.slice(state.diagnostics.length - DIAG_MAX_LINES);
+    }
+    renderDiagnosticLogs();
+    try {
+      console.debug('[DocsMD]', line);
+    } catch (_) {
+      // ignore console failures
+    }
   }
 
   function setDownloadLinkVisible(visible) {
@@ -2049,6 +2113,8 @@
     const startUrl = normalizeUrl(location.href) || location.href;
     state.scanStartUrl = startUrl;
     resetExportProgress();
+    clearDiagnosticLogs();
+    addDiagnosticLog('SCAN', '开始扫描，起始地址: ' + startUrl);
 
     state.scanning = true;
     resetPauseState();
@@ -2097,16 +2163,19 @@
       state.queueCount = 0;
       state.currentUrl = '';
       updateProgress('扫描完成，可勾选后导出');
+      addDiagnosticLog('SCAN', '扫描完成，发现页面: ' + urls.length);
       scanSucceeded = true;
     } catch (err) {
       renderTree(state.discoveredUrls);
       setStatus('扫描失败: ' + (err && err.message ? err.message : 'unknown'));
+      addDiagnosticLog('ERROR', '扫描失败: ' + (err && err.message ? err.message : 'unknown'));
     } finally {
       state.scanning = false;
       setScanButtonBusy(false);
       if (scanSucceeded) {
         playStatefulButtonSuccess(state.elements.scanBtn, 'scanSuccessTimer');
       }
+      addDiagnosticLog('SCAN', '扫描流程结束');
       resetPauseState();
     }
   }
@@ -2167,6 +2236,9 @@
       return;
     }
 
+    clearDiagnosticLogs();
+    addDiagnosticLog('EXPORT', '开始导出，已选页面: ' + selected.length + '，图片模式: ' + imageMode);
+
     state.exporting = true;
     resetPauseState();
     setExportButtonBusy(true);
@@ -2194,8 +2266,33 @@
     }
 
     let maxExportPercent = 0;
+    const stageEntered = new Set();
+    const stageCompleted = new Set();
+    let zipProgressBucket = -1;
 
     function updateExportStage(stageLabel, completed, total) {
+      const stageProgress = computeStageProgress(completed, total);
+      if (!stageEntered.has(stageLabel)) {
+        stageEntered.add(stageLabel);
+        addDiagnosticLog('STAGE', '进入阶段: ' + stageLabel + ' (total=' + stageProgress.total + ')');
+      }
+      if (
+        stageLabel === 'ZIP打包' &&
+        stageProgress.total > 0
+      ) {
+        const bucket = Math.floor(stageProgress.percent / 20);
+        if (bucket > zipProgressBucket) {
+          zipProgressBucket = bucket;
+          addDiagnosticLog('ZIP', '打包进度: ' + stageProgress.percent + '%');
+        }
+      }
+      if (
+        !stageCompleted.has(stageLabel) &&
+        stageProgress.completed >= stageProgress.total
+      ) {
+        stageCompleted.add(stageLabel);
+        addDiagnosticLog('STAGE', '阶段完成: ' + stageLabel);
+      }
       const overallPercent = computeOverallExportPercent(stageLabel, completed, total);
       maxExportPercent = Math.max(maxExportPercent, overallPercent);
       setExportButtonProgress(maxExportPercent);
@@ -2333,6 +2430,7 @@
       }
 
       updateExportStage('ZIP打包', 0, 100);
+      addDiagnosticLog('ZIP', '开始生成 ZIP');
       const zipPack = await generateZipBlobWithFallback(zip, {
         timeoutMs: DEFAULTS.zipPackTimeoutMs,
         onProgress: (metadata) => {
@@ -2341,9 +2439,17 @@
         }
       });
       if (zipPack.fallbackUsed) {
+        addDiagnosticLog(
+          'ZIP',
+          zipPack.timeoutTriggered
+            ? 'blob 通道超时，已切换 uint8array 回退'
+            : 'blob 通道不兼容，已切换 uint8array 回退'
+        );
         setStatus(zipPack.timeoutTriggered
           ? 'ZIP 打包主通道超时，已自动切换兼容模式'
           : 'ZIP 打包主通道不兼容，已自动切换兼容模式');
+      } else {
+        addDiagnosticLog('ZIP', 'blob 通道生成完成');
       }
       const blob = zipPack.blob;
       updateExportStage('ZIP打包', 100, 100);
@@ -2351,6 +2457,7 @@
       const filename = 'docs-md-export-' + stamp + '.zip';
 
       const downloadUrl = prepareDownloadLink(blob, filename);
+      addDiagnosticLog('DOWNLOAD', '已准备下载链接: ' + filename);
       let autoDownloadResult = null;
       try {
         autoDownloadResult = await triggerZipDownloadByUrl(downloadUrl, filename, {
@@ -2371,7 +2478,12 @@
             : null,
           anchorDownloadByUrl
         });
+        addDiagnosticLog(
+          'DOWNLOAD',
+          '自动下载结果: ' + (autoDownloadResult ? autoDownloadResult.method : 'unknown')
+        );
       } catch (err) {
+        addDiagnosticLog('ERROR', '自动下载失败: ' + normalizeErrorMessage(err, 'unknown'));
         setStatus('ZIP 已生成，自动下载失败：' + normalizeErrorMessage(err, 'unknown') + '。请点击“手动下载 ZIP”');
       }
 
@@ -2385,7 +2497,15 @@
       updateProgress('导出完成: ' + state.doneCount + ' 页 ' + methodSuffix + '，若未弹出下载请点击“手动下载 ZIP”');
       exportSucceeded = true;
     } catch (err) {
-      setStatus('导出失败: ' + (err && err.message ? err.message : 'unknown'));
+      const errMessage = err && err.message ? err.message : 'unknown';
+      if (errMessage === 'zip-pack-timeout') {
+        setStatus('导出失败: ZIP 打包超时（主通道）');
+      } else if (errMessage === 'zip-pack-fallback-timeout') {
+        setStatus('导出失败: ZIP 打包超时（回退通道）');
+      } else {
+        setStatus('导出失败: ' + errMessage);
+      }
+      addDiagnosticLog('ERROR', '导出失败: ' + errMessage);
     } finally {
       state.currentUrl = '';
       state.exporting = false;
@@ -2393,6 +2513,7 @@
       if (exportSucceeded) {
         playStatefulButtonSuccess(state.elements.exportBtn, 'exportSuccessTimer');
       }
+      addDiagnosticLog('EXPORT', '导出流程结束' + (exportSucceeded ? '（成功）' : '（失败）'));
       resetPauseState();
     }
   }
