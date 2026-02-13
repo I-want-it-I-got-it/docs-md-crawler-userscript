@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 
 const crawler = require('../docs-md-crawler.user.js');
 
@@ -254,6 +255,17 @@ test('buildStageProgressText keeps ZIP stage as percentage-only text', () => {
   assert.equal(
     crawler.buildStageProgressText('Markdown转换', 3, 10),
     'Markdown转换: 3/10 (30%)'
+  );
+});
+
+test('resolveProgressFillPercent prefers overall progress for progress bar', () => {
+  assert.equal(
+    crawler.resolveProgressFillPercent('ZIP打包', 40, 100, 82),
+    82
+  );
+  assert.equal(
+    crawler.resolveProgressFillPercent('ZIP打包', 40, 100),
+    40
   );
 });
 
@@ -512,6 +524,44 @@ test('playDownloadCompleteSound schedules a short tone and closes context', () =
   assert.equal(closed, true);
 });
 
+test('playDownloadCompleteSound uses a louder default gain', () => {
+  const gainSetCalls = [];
+  const fakeOscillator = {
+    type: '',
+    frequency: { setValueAtTime() {} },
+    connect() {},
+    start() {},
+    stop() {},
+    onended: null
+  };
+  const fakeGainNode = {
+    gain: {
+      setValueAtTime(value) {
+        gainSetCalls.push(value);
+      },
+      exponentialRampToValueAtTime() {}
+    },
+    connect() {}
+  };
+  function FakeAudioContext() {
+    return {
+      currentTime: 0,
+      state: 'running',
+      destination: {},
+      createOscillator() {
+        return fakeOscillator;
+      },
+      createGain() {
+        return fakeGainNode;
+      },
+      close() {}
+    };
+  }
+  crawler.playDownloadCompleteSound({ AudioContextCtor: FakeAudioContext });
+  assert.equal(gainSetCalls.length, 1);
+  assert.equal(gainSetCalls[0], 0.08);
+});
+
 test('normalizeBinaryPayload converts binary-like values into Uint8Array for JSZip', async () => {
   const fromArrayBuffer = await crawler.normalizeBinaryPayload(Uint8Array.from([1, 2, 3]).buffer);
   assert.ok(fromArrayBuffer instanceof Uint8Array);
@@ -595,6 +645,8 @@ test('buildUiStyles provides shadcn-style tokens and button variants', () => {
   assert.match(css, /\.docs-md-group-separator\{/);
   assert.match(css, /\.docs-md-inline-field\{/);
   assert.match(css, /\.docs-md-image-select\{/);
+  assert.match(css, /\.docs-md-image-select:focus-visible\{outline:none/);
+  assert.doesNotMatch(css, /\.docs-md-image-select:focus-visible\{outline:2px/);
   assert.doesNotMatch(css, /#docs-md-diag-wrap\{/);
   assert.doesNotMatch(css, /#docs-md-diag\{/);
   assert.doesNotMatch(css, /#docs-md-diag-clear\{/);
@@ -630,6 +682,11 @@ test('buildPanelMarkup keeps required ids and shadcn-style structure', () => {
   assert.match(html, /docs-md-check-row docs-md-hidden/);
   assert.match(html, /id="docs-md-check-all" type="checkbox" class="docs-md-square-check docs-md-group-check" checked/);
   assert.match(html, /id="docs-md-tree" class="docs-md-surface docs-md-hidden"/);
+});
+
+test('export bundle no longer includes SUMMARY.md entry', () => {
+  const source = fs.readFileSync(require.resolve('../docs-md-crawler.user.js'), 'utf8');
+  assert.doesNotMatch(source, /SUMMARY\.md/);
 });
 
 test('buildPanelMarkup removes shadcn-inspired subtitle text', () => {

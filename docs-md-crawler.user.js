@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.15
+// @version      0.2.16
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -372,6 +372,15 @@
       return stageLabel + ': ' + progress.percent + '%';
     }
     return stageLabel + ': ' + progress.completed + '/' + progress.total + ' (' + progress.percent + '%)';
+  }
+
+  function resolveProgressFillPercent(stageLabel, completed, total, overallPercent) {
+    const stagePercent = computeStageProgress(completed, total).percent;
+    const parsedOverall = Number(overallPercent);
+    if (Number.isFinite(parsedOverall)) {
+      return Math.min(100, Math.max(0, Math.round(parsedOverall)));
+    }
+    return stagePercent;
   }
 
   function normalizeImageMode(rawValue) {
@@ -832,7 +841,7 @@
     const frequencyHz = Number(opts.frequencyHz) > 0 ? Number(opts.frequencyHz) : 880;
     const durationSec = Number(opts.durationSec) > 0 ? Number(opts.durationSec) : 0.12;
     const gainValue = Number(opts.gain);
-    const volume = Number.isFinite(gainValue) && gainValue >= 0 ? gainValue : 0.035;
+    const volume = Number.isFinite(gainValue) && gainValue >= 0 ? gainValue : 0.08;
     const now = Number(ctx.currentTime) || 0;
 
     try {
@@ -1421,7 +1430,7 @@
       '.docs-md-inline-field .docs-md-image-select{margin-left:auto}',
       '.docs-md-label{font-size:12px;color:hsl(var(--muted-foreground));font-weight:600}',
       '.docs-md-image-select{appearance:none;-webkit-appearance:none;min-width:148px;height:34px;padding:0 28px 0 10px;border:1px solid hsl(var(--input));border-radius:10px;background:hsl(var(--background));color:hsl(var(--foreground));font-size:12px;font-weight:600;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,hsl(var(--muted-foreground)) 50%),linear-gradient(135deg,hsl(var(--muted-foreground)) 50%,transparent 50%);background-position:calc(100% - 13px) 14px,calc(100% - 8px) 14px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}',
-      '.docs-md-image-select:focus-visible{outline:2px solid hsl(var(--ring));outline-offset:1px}',
+      '.docs-md-image-select:focus,.docs-md-image-select:focus-visible{outline:none;border-color:hsl(var(--input));box-shadow:none}',
       '#docs-md-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}',
       '.docs-md-btn{min-height:34px;padding:0 10px;border-radius:10px;border:1px solid transparent;font-size:12px;font-weight:700;letter-spacing:.01em;cursor:pointer;transition:background .18s ease,color .18s ease,border-color .18s ease,transform .18s ease}',
       '.docs-md-btn:hover{transform:translateY(-1px)}',
@@ -1546,6 +1555,7 @@
       computeGroupSelectionState,
       computeStageProgress,
       buildStageProgressText,
+      resolveProgressFillPercent,
       computeZipPackProgress,
       normalizeImageMode,
       formatUsageStats,
@@ -1906,9 +1916,9 @@
     }
   }
 
-  function setExportProgress(stageLabel, completed, total) {
-    const progress = computeStageProgress(completed, total);
-    state.elements.progressFill.style.width = progress.percent + '%';
+  function setExportProgress(stageLabel, completed, total, overallPercent) {
+    const fillPercent = resolveProgressFillPercent(stageLabel, completed, total, overallPercent);
+    state.elements.progressFill.style.width = fillPercent + '%';
     state.elements.progressText.textContent = buildStageProgressText(stageLabel, completed, total);
   }
 
@@ -2714,17 +2724,6 @@
     }
   }
 
-  function buildSummary(pages) {
-    const lines = ['# Summary', ''];
-    pages
-      .slice()
-      .sort((a, b) => a.path.localeCompare(b.path))
-      .forEach((page) => {
-        lines.push('- [' + page.title + '](' + page.path + ')');
-      });
-    return lines.join('\n');
-  }
-
   async function runExport() {
     if (state.exporting || state.scanning) {
       return;
@@ -2804,7 +2803,7 @@
       maxExportPercent = Math.max(maxExportPercent, overallPercent);
       setExportButtonProgress(maxExportPercent);
       setExportProgressVisible(true);
-      setExportProgress(stageLabel, completed, total);
+      setExportProgress(stageLabel, completed, total, maxExportPercent);
       refreshUsage();
     }
 
@@ -2865,7 +2864,6 @@
       };
 
       const imageJobs = [];
-      const exportedPages = [];
       let convertProcessed = 0;
       updateExportStage('Markdown转换', 0, pageDrafts.length);
 
@@ -2912,7 +2910,6 @@
         });
         zipInputCount += 1;
         zipInputTextBytes += new TextEncoder().encode(markdownText).length;
-        exportedPages.push(page);
         state.doneCount += 1;
         exportStats.pageConverted += 1;
         convertProcessed += 1;
@@ -2946,15 +2943,6 @@
       } else {
         updateExportStage('图片下载', 0, 0);
       }
-
-      const summaryText = buildSummary(exportedPages);
-      zip.file('SUMMARY.md', summaryText);
-      zipEntries.push({
-        path: 'SUMMARY.md',
-        text: summaryText
-      });
-      zipInputCount += 1;
-      zipInputTextBytes += new TextEncoder().encode(summaryText).length;
 
       if (state.failed.length) {
         const failText = state.failed
