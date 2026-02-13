@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.16
+// @version      0.2.17
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -1118,6 +1118,11 @@
     return parseLinksFromDocument(doc, baseUrl);
   }
 
+  function parseNavigationLinksFromHtml(html, baseUrl) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return parseNavigationLinksFromDocument(doc, baseUrl);
+  }
+
   function getLinkScopeNodes(doc, preferContentScopes) {
     if (!doc || typeof doc.querySelectorAll !== 'function') {
       return [];
@@ -1144,6 +1149,42 @@
 
     const fallback = doc.body || doc.documentElement;
     return fallback ? [fallback] : [];
+  }
+
+  function getNavigationScopeNodes(doc) {
+    if (!doc || typeof doc.querySelectorAll !== 'function') {
+      return [];
+    }
+    const scopes = [];
+    const seen = new Set();
+    const selectors = [
+      'aside nav',
+      'aside',
+      '[role="navigation"]',
+      'nav',
+      '.sidebar',
+      '.docs-sidebar',
+      '.doc-sidebar',
+      '.site-sidebar',
+      '.menu',
+      '.site-menu',
+      '.toc',
+      '.table-of-contents',
+      '[class*="sidebar" i]',
+      '[class*="toc" i]'
+    ];
+
+    selectors.forEach((selector) => {
+      doc.querySelectorAll(selector).forEach((node) => {
+        if (!node || seen.has(node)) {
+          return;
+        }
+        seen.add(node);
+        scopes.push(node);
+      });
+    });
+
+    return scopes;
   }
 
   function isNavigationLikeAnchor(anchor, footerSelector) {
@@ -1342,11 +1383,63 @@
     return links;
   }
 
+  function parseNavigationLinksFromDocument(doc, baseUrl, options) {
+    const opts = options || {};
+    const skipHeaderLinks = opts.skipHeaderLinks !== false;
+    const skipFooterLinks = opts.skipFooterLinks !== false;
+    const headerSelector = 'header,[role="banner"],.site-header,.top-nav';
+    const footerSelector = 'footer,[role="contentinfo"],#footer,.footer,.site-footer,[id*="footer" i],[class*="footer" i]';
+    const links = [];
+    const unique = new Set();
+
+    if (!doc || typeof doc.querySelectorAll !== 'function') {
+      return links;
+    }
+
+    const scopes = getNavigationScopeNodes(doc);
+    scopes.forEach((scope) => {
+      scope.querySelectorAll('a[href]').forEach((a) => {
+        if (!a) {
+          return;
+        }
+        if (skipHeaderLinks && typeof a.closest === 'function' && a.closest(headerSelector)) {
+          return;
+        }
+        if (skipFooterLinks && typeof a.closest === 'function' && a.closest(footerSelector)) {
+          return;
+        }
+        const raw = a.getAttribute('href');
+        if (!raw) {
+          return;
+        }
+        try {
+          const absolute = new URL(raw, baseUrl).href;
+          if (unique.has(absolute)) {
+            return;
+          }
+          unique.add(absolute);
+          links.push(absolute);
+        } catch (_) {
+          // ignore invalid URL
+        }
+      });
+    });
+
+    return links;
+  }
+
   function collectVisibleLinksFromCurrentPage(baseUrl) {
     if (typeof document === 'undefined') {
       return [];
     }
     return parseLinksFromDocument(document, baseUrl);
+  }
+
+  function collectNavigationLinksFromCurrentPage(baseUrl) {
+    if (typeof document === 'undefined') {
+      return [];
+    }
+    return parseNavigationLinksFromDocument(document, baseUrl);
   }
 
   function extractDocTitle(doc, fallbackUrl) {
@@ -1541,6 +1634,7 @@
     return {
       normalizeUrl,
       parseLinksFromDocument,
+      parseNavigationLinksFromDocument,
       inferDocRootPrefixes,
       isLikelyDocUrlByStructure,
       matchesDocRootPrefix,
@@ -2414,6 +2508,7 @@
     const maxDepth = options.maxDepth;
     const excludePatterns = options.excludePatterns || [];
     const seedLinks = Array.isArray(options.seedLinks) ? options.seedLinks : [];
+    const navigationSeedLinks = Array.isArray(options.navigationSeedLinks) ? options.navigationSeedLinks : [];
     const crawlDescendantsOnly = options.crawlDescendantsOnly !== false;
     const useSitemap = options.useSitemap === true && !crawlDescendantsOnly;
     const followLinksInsideArticle = options.followLinksInsideArticle === true;
@@ -2478,6 +2573,7 @@
 
     addUrl(startUrl, 0, 'start');
     seedLinks.forEach((seedUrl) => addUrl(seedUrl, 1, 'seed'));
+    navigationSeedLinks.forEach((navUrl) => addUrl(navUrl, 1, 'nav-seed'));
     if (useSitemap) {
       sitemapUrls.forEach((sitemapUrl) => addUrl(sitemapUrl, 1, 'sitemap'));
     }
@@ -2521,6 +2617,12 @@
       const shouldExpand = shouldExpandLinksFromPage(current, {
         followLinksInsideArticle
       });
+
+      const navigationLinks = parseNavigationLinksFromHtml(html, current);
+      for (const navLink of navigationLinks) {
+        addUrl(navLink, depth + 1, 'nav');
+      }
+
       if (shouldExpand) {
         const links = parseLinksFromHtml(html, current);
         for (const link of links) {
@@ -2616,12 +2718,14 @@
 
     const startUrl = normalizeUrl(location.href) || location.href;
     const visibleLinks = collectVisibleLinksFromCurrentPage(startUrl);
+    const navigationLinks = collectNavigationLinksFromCurrentPage(startUrl);
     state.scanStartUrl = startUrl;
     resetExportProgress();
     clearDiagnosticLogs();
     addDiagnosticLog('SCAN', '开始扫描，起始地址: ' + startUrl);
     addDiagnosticLog('SCAN', '当前页面可见链接: ' + visibleLinks.length);
-    addDiagnosticLog('SCAN', '扫描策略: 仅递归当前页面可达子链接（不启用 sitemap 全站扩展）');
+    addDiagnosticLog('SCAN', '当前页面导航链接: ' + navigationLinks.length);
+    addDiagnosticLog('SCAN', '扫描策略: 优先按导航栏分类扩展，再递归正文链接（不启用 sitemap 全站扩展）');
     addDiagnosticLog('SCAN', '链接扩展: 默认不跟进文章页正文内链接');
 
     state.scanning = true;
@@ -2657,6 +2761,7 @@
         maxDepth: DEFAULTS.maxDepth,
         excludePatterns: DEFAULT_EXCLUDES,
         seedLinks: visibleLinks,
+        navigationSeedLinks: navigationLinks,
         crawlDescendantsOnly: true,
         useSitemap: false,
         followLinksInsideArticle: false,

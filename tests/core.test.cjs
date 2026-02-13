@@ -114,6 +114,78 @@ test('parseLinksFromDocument skips nav/footer links and keeps main scope links',
   ]);
 });
 
+test('parseNavigationLinksFromDocument collects sidebar category links and skips header/footer noise', () => {
+  const navAnchors = [
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/docs/getting-started' : '';
+      },
+      closest() {
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/docs/api' : '';
+      },
+      closest() {
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/pricing' : '';
+      },
+      closest(selector) {
+        if (selector === 'header,[role="banner"],.site-header,.top-nav') {
+          return { tagName: 'HEADER' };
+        }
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/docs/changelog' : '';
+      },
+      closest(selector) {
+        if (selector === 'footer,[role="contentinfo"],#footer,.footer,.site-footer,[id*="footer" i],[class*="footer" i]') {
+          return { tagName: 'FOOTER' };
+        }
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/docs/api' : '';
+      },
+      closest() {
+        return null;
+      }
+    }
+  ];
+
+  const navScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? navAnchors : [];
+    }
+  };
+
+  const mockDoc = {
+    querySelectorAll(selector) {
+      if (selector === 'aside nav' || selector === 'aside' || selector === '[role="navigation"]' || selector === 'nav') {
+        return [navScope];
+      }
+      return [];
+    }
+  };
+
+  const links = crawler.parseNavigationLinksFromDocument(mockDoc, 'https://example.com/docs');
+  assert.deepEqual(links, [
+    'https://example.com/docs/getting-started',
+    'https://example.com/docs/api'
+  ]);
+});
+
 test('inferDocRootPrefixes prefers article roots over generic category roots', () => {
   const roots = crawler.inferDocRootPrefixes(
     'https://example.com/categories/ai-agents',
