@@ -38,6 +38,33 @@
   const EXPORT_BUTTON_IDLE_TEXT = '导出 ZIP';
   const EXPORT_STAGE_SEQUENCE = ['页面抓取', 'Markdown转换', '图片下载', 'ZIP打包'];
   const IMAGE_MODE_OPTIONS = new Set(['external', 'local', 'none']);
+  const TRUSTED_TYPES_POLICY_NAMES = ['docs-md-crawler', 'default'];
+  const GENERIC_ROOT_SEGMENTS = new Set([
+    'category',
+    'categories',
+    'tag',
+    'tags',
+    'author',
+    'authors',
+    'page',
+    'pages',
+    'search'
+  ]);
+  const DOCS_ROOT_HINT_SEGMENTS = new Set([
+    'docs',
+    'doc',
+    'documentation',
+    'developer',
+    'developers',
+    'guide',
+    'guides',
+    'api',
+    'reference',
+    'manual',
+    'kb',
+    'help'
+  ]);
+  const BARE_DOMAIN_LINK_PATTERN = /^(?:www\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?::\d+)?(?:[/?#].*)?$/i;
 
   function normalizeRootPath(raw) {
     let root = String(raw || '/').trim();
@@ -59,6 +86,61 @@
         u.pathname = u.pathname.replace(/\/+$/, '');
       }
       return u.href;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function shouldSkipRawHref(rawHref) {
+    const value = String(rawHref || '').trim();
+    if (!value) {
+      return true;
+    }
+    if (value.startsWith('#')) {
+      return true;
+    }
+    if (/[`\s]/.test(value)) {
+      return true;
+    }
+    const lowered = value.toLowerCase();
+    return (
+      lowered.startsWith('javascript:') ||
+      lowered.startsWith('mailto:') ||
+      lowered.startsWith('tel:') ||
+      lowered.startsWith('data:')
+    );
+  }
+
+  function looksLikeBareDomainHref(rawHref) {
+    const value = String(rawHref || '').trim();
+    if (!value || value.startsWith('/') || value.startsWith('#')) {
+      return false;
+    }
+    if (/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(value)) {
+      return false;
+    }
+    return BARE_DOMAIN_LINK_PATTERN.test(value);
+  }
+
+  function resolveHrefForCrawl(rawHref, baseUrl) {
+    const value = String(rawHref || '').trim();
+    if (shouldSkipRawHref(value)) {
+      return '';
+    }
+
+    let candidate = value;
+    if (candidate.startsWith('//')) {
+      candidate = 'https:' + candidate;
+    } else if (looksLikeBareDomainHref(candidate)) {
+      candidate = 'https://' + candidate;
+    }
+
+    try {
+      const absolute = new URL(candidate, baseUrl);
+      if (!/^https?:$/.test(absolute.protocol)) {
+        return '';
+      }
+      return absolute.href;
     } catch (_) {
       return '';
     }
@@ -958,6 +1040,96 @@
       .replace(/'/g, '&#39;');
   }
 
+  function createTrustedHtmlPolicy(options) {
+    const opts = options || {};
+    const trustedTypesApi = opts.trustedTypes || (typeof trustedTypes !== 'undefined' ? trustedTypes : null);
+    if (!trustedTypesApi || typeof trustedTypesApi.createPolicy !== 'function') {
+      return null;
+    }
+
+    const nameCandidates = [];
+    if (opts.preferredName) {
+      nameCandidates.push(String(opts.preferredName));
+    }
+    for (const name of TRUSTED_TYPES_POLICY_NAMES) {
+      if (!nameCandidates.includes(name)) {
+        nameCandidates.push(name);
+      }
+    }
+
+    const policyFactory = {
+      createHTML(value) {
+        return String(value || '');
+      }
+    };
+
+    for (const name of nameCandidates) {
+      if (!name) {
+        continue;
+      }
+      try {
+        return trustedTypesApi.createPolicy(name, policyFactory);
+      } catch (_) {
+        // policy not allowed or already exists, continue trying
+      }
+    }
+
+    if (typeof trustedTypesApi.getPolicy === 'function') {
+      for (const name of nameCandidates) {
+        if (!name) {
+          continue;
+        }
+        try {
+          const policy = trustedTypesApi.getPolicy(name);
+          if (policy && typeof policy.createHTML === 'function') {
+            return policy;
+          }
+        } catch (_) {
+          // ignore inaccessible policy lookups
+        }
+      }
+    }
+
+    const defaultPolicy = trustedTypesApi.defaultPolicy;
+    if (defaultPolicy && typeof defaultPolicy.createHTML === 'function') {
+      return defaultPolicy;
+    }
+    return null;
+  }
+
+  function toTrustedHtml(html, trustedPolicy) {
+    const rawHtml = String(html || '');
+    if (!trustedPolicy || typeof trustedPolicy.createHTML !== 'function') {
+      return rawHtml;
+    }
+    try {
+      return trustedPolicy.createHTML(rawHtml);
+    } catch (_) {
+      return rawHtml;
+    }
+  }
+
+  function parseHtmlDocument(html, options) {
+    const opts = options || {};
+    const DOMParserCtor = opts.DOMParserCtor || (typeof DOMParser !== 'undefined' ? DOMParser : null);
+    if (!DOMParserCtor) {
+      throw new Error('domparser-unavailable');
+    }
+    const rawHtml = String(html || '');
+    const parser = new DOMParserCtor();
+    try {
+      return parser.parseFromString(rawHtml, 'text/html');
+    } catch (err) {
+      const trustedHtml = toTrustedHtml(rawHtml, opts.trustedPolicy);
+      if (trustedHtml === rawHtml) {
+        throw err;
+      }
+      return parser.parseFromString(trustedHtml, 'text/html');
+    }
+  }
+
+  const trustedHtmlPolicy = createTrustedHtmlPolicy();
+
   function formatFailureReason(reason) {
     const raw = String(reason || '').trim();
     if (!raw) {
@@ -1114,17 +1286,17 @@
   }
 
   function parseLinksFromHtml(html, baseUrl) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const doc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
     return parseLinksFromDocument(doc, baseUrl);
   }
 
   function parseNavigationLinksFromHtml(html, baseUrl) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const doc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
     return parseNavigationLinksFromDocument(doc, baseUrl);
   }
 
   function parseCategoryLinksFromHtml(html, baseUrl, options) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const doc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
     return parseCategoryLinksFromDocument(doc, baseUrl, options);
   }
 
@@ -1267,6 +1439,71 @@
     }
   }
 
+  function inferDocsRootPath(startUrl, candidateUrls, fallbackPath) {
+    const fallback = normalizeRootPath(fallbackPath || getDocRootPathFromUrl(startUrl));
+    if (fallback !== '/') {
+      return fallback;
+    }
+
+    let origin = '';
+    try {
+      origin = new URL(startUrl).origin;
+    } catch (_) {
+      return fallback;
+    }
+
+    const scoreByRoot = new Map();
+    const inputs = Array.isArray(candidateUrls) ? candidateUrls : [];
+    for (const rawUrl of inputs) {
+      const normalized = normalizeUrl(rawUrl);
+      if (!normalized) {
+        continue;
+      }
+      try {
+        const u = new URL(normalized);
+        if (u.origin !== origin) {
+          continue;
+        }
+        const segments = splitPathSegments(u.pathname).map((item) => item.toLowerCase());
+        if (!segments.length) {
+          continue;
+        }
+        const root = segments[0];
+        if (!root || GENERIC_ROOT_SEGMENTS.has(root)) {
+          continue;
+        }
+        const weight = DOCS_ROOT_HINT_SEGMENTS.has(root) ? 4 : 1;
+        scoreByRoot.set(root, (scoreByRoot.get(root) || 0) + weight);
+      } catch (_) {
+        // ignore invalid URL
+      }
+    }
+
+    if (!scoreByRoot.size) {
+      return '/';
+    }
+
+    const ranked = Array.from(scoreByRoot.entries()).sort((a, b) => {
+      if (b[1] !== a[1]) {
+        return b[1] - a[1];
+      }
+      const aHint = DOCS_ROOT_HINT_SEGMENTS.has(a[0]) ? 1 : 0;
+      const bHint = DOCS_ROOT_HINT_SEGMENTS.has(b[0]) ? 1 : 0;
+      if (bHint !== aHint) {
+        return bHint - aHint;
+      }
+      return a[0].localeCompare(b[0]);
+    });
+
+    const topRoot = ranked[0][0];
+    const topScore = ranked[0][1];
+    if (!DOCS_ROOT_HINT_SEGMENTS.has(topRoot) && topScore < 2) {
+      return '/';
+    }
+
+    return '/' + topRoot;
+  }
+
   function deriveCategoryPathPrefixes(startUrl, categoryUrls, docsRootPath) {
     const rootPath = normalizeRootPath(docsRootPath || getDocRootPathFromUrl(startUrl));
     const prefixes = new Set();
@@ -1312,17 +1549,6 @@
   }
 
   function inferDocRootPrefixes(startUrl, seedLinks, sitemapUrls, origin) {
-    const genericRoots = new Set([
-      'category',
-      'categories',
-      'tag',
-      'tags',
-      'author',
-      'authors',
-      'page',
-      'pages',
-      'search'
-    ]);
     const scoreByRoot = new Map();
     const inputs = [startUrl]
       .concat(seedLinks || [])
@@ -1343,7 +1569,7 @@
           return;
         }
         const root = segments[0];
-        if (!root || genericRoots.has(root)) {
+        if (!root || GENERIC_ROOT_SEGMENTS.has(root)) {
           return;
         }
         scoreByRoot.set(root, (scoreByRoot.get(root) || 0) + 1);
@@ -1354,7 +1580,7 @@
 
     if (!scoreByRoot.size) {
       const startRoot = getFirstPathSegment(startUrl);
-      return startRoot && !genericRoots.has(startRoot) ? [startRoot] : [];
+      return startRoot && !GENERIC_ROOT_SEGMENTS.has(startRoot) ? [startRoot] : [];
     }
 
     let maxScore = 0;
@@ -1460,16 +1686,15 @@
         }
         const raw = a.getAttribute('href');
         if (!raw) return;
-        try {
-          const absolute = new URL(raw, baseUrl).href;
-          if (unique.has(absolute)) {
-            return;
-          }
-          unique.add(absolute);
-          links.push(absolute);
-        } catch (_) {
-          // ignore invalid URL
+        const absolute = resolveHrefForCrawl(raw, baseUrl);
+        if (!absolute) {
+          return;
         }
+        if (unique.has(absolute)) {
+          return;
+        }
+        unique.add(absolute);
+        links.push(absolute);
       });
     });
     return links;
@@ -1504,16 +1729,15 @@
         if (!raw) {
           return;
         }
-        try {
-          const absolute = new URL(raw, baseUrl).href;
-          if (unique.has(absolute)) {
-            return;
-          }
-          unique.add(absolute);
-          links.push(absolute);
-        } catch (_) {
-          // ignore invalid URL
+        const absolute = resolveHrefForCrawl(raw, baseUrl);
+        if (!absolute) {
+          return;
         }
+        if (unique.has(absolute)) {
+          return;
+        }
+        unique.add(absolute);
+        links.push(absolute);
       });
     });
 
@@ -1551,10 +1775,8 @@
           return;
         }
 
-        let absolute;
-        try {
-          absolute = new URL(raw, baseUrl).href;
-        } catch (_) {
+        const absolute = resolveHrefForCrawl(raw, baseUrl);
+        if (!absolute) {
           return;
         }
 
@@ -1804,10 +2026,12 @@
       deriveCategoryPathPrefixes,
       matchesAnyPathPrefix,
       inferDocRootPrefixes,
+      inferDocsRootPath,
       isLikelyDocUrlByStructure,
       matchesDocRootPrefix,
       shouldExpandLinksFromPage,
       isDocUrl,
+      resolveHrefForCrawl,
       buildMarkdownPath,
       buildZipFilename,
       getDisplayTitle,
@@ -1829,6 +2053,10 @@
       buildStoreZipBlob,
       playDownloadCompleteSound,
       triggerZipDownloadByUrl,
+      createTrustedHtmlPolicy,
+      toTrustedHtml,
+      parseHtmlDocument,
+      shouldRecordScanFailure,
       normalizeRootPath,
       sanitizeSegment,
       relativePath,
@@ -1881,7 +2109,16 @@
 
     const panel = document.createElement('div');
     panel.id = 'docs-md-panel';
-    panel.innerHTML = buildPanelMarkup();
+    const panelDoc = parseHtmlDocument(buildPanelMarkup(), { trustedPolicy: trustedHtmlPolicy });
+    const panelBody = panelDoc && panelDoc.body ? panelDoc.body : null;
+    if (!panelBody) {
+      throw new Error('panel-markup-parse-failed');
+    }
+    const panelFragment = document.createDocumentFragment();
+    Array.from(panelBody.childNodes).forEach((node) => {
+      panelFragment.appendChild(document.importNode(node, true));
+    });
+    panel.appendChild(panelFragment);
 
     document.body.appendChild(fab);
     document.body.appendChild(panel);
@@ -2005,12 +2242,21 @@
     }
   }
 
+  function clearElementChildren(element) {
+    if (!element) {
+      return;
+    }
+    while (element.firstChild) {
+      element.removeChild(element.firstChild);
+    }
+  }
+
   function renderFailedQueue() {
     if (!state.elements.failedTree) {
       return;
     }
     const tree = state.elements.failedTree;
-    tree.innerHTML = '';
+    clearElementChildren(tree);
     const items = buildFailedQueueItems(state.failed);
     if (!items.length) {
       tree.textContent = '暂无失败项';
@@ -2099,7 +2345,7 @@
         await fetchBinaryWithRetry(failedItem.url, DEFAULTS.retries, DEFAULTS.requestDelayMs);
       } else {
         const html = await fetchTextWithRetry(failedItem.url, DEFAULTS.retries, DEFAULTS.requestDelayMs);
-        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const doc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
         const title = extractDocTitle(doc, failedItem.url);
         failedItem.title = title;
 
@@ -2355,7 +2601,35 @@
   }
 
   function updateUsageText(stats) {
-    state.elements.usageText.innerHTML = buildUsageStatsMarkup(stats);
+    if (!state.elements.usageText) {
+      return;
+    }
+    const pageFetched = Number(stats.pageFetched) || 0;
+    const pageConverted = Number(stats.pageConverted) || 0;
+    const imagesDownloaded = Number(stats.imagesDownloaded) || 0;
+    const failedCount = Math.max(0, Number(stats.failedCount) || 0);
+    const elapsedMs = Number(stats.elapsedMs) || 0;
+
+    clearElementChildren(state.elements.usageText);
+    state.elements.usageText.appendChild(
+      document.createTextNode(
+        '任务: 页面抓取 ' + pageFetched + ' | 页面转换 ' + pageConverted + ' | 图片下载 ' + imagesDownloaded + ' | '
+      )
+    );
+
+    if (failedCount > 0) {
+      const failButton = document.createElement('button');
+      failButton.type = 'button';
+      failButton.className = 'docs-md-fail-link';
+      failButton.textContent = '失败 ' + failedCount;
+      state.elements.usageText.appendChild(failButton);
+    } else {
+      state.elements.usageText.appendChild(document.createTextNode('失败 0'));
+    }
+
+    state.elements.usageText.appendChild(
+      document.createTextNode(' | 耗时 ' + formatDuration(elapsedMs))
+    );
   }
 
   function clearDiagnosticLogs() {}
@@ -2412,7 +2686,7 @@
 
   function renderTree(items) {
     const tree = state.elements.tree;
-    tree.innerHTML = '';
+    clearElementChildren(tree);
     setTreeVisible(true);
 
     if (!items.length) {
@@ -2616,6 +2890,14 @@
     throw lastError || new Error('request-failed');
   }
 
+  function shouldRecordScanFailure(error) {
+    const message = String(error && error.message ? error.message : error || '').trim().toLowerCase();
+    if (!message) {
+      return true;
+    }
+    return !/^http-(404|410)\b/.test(message);
+  }
+
   async function discoverSitemapUrls(origin) {
     const candidates = [new URL('/sitemap.xml', origin).href];
     try {
@@ -2790,14 +3072,19 @@
       try {
         html = await fetchTextWithRetry(current, options.retries, options.requestDelayMs);
       } catch (err) {
-        addFailed(current, 'discover:' + (err && err.message ? err.message : 'failed'));
+        const reason = err && err.message ? err.message : 'failed';
+        if (shouldRecordScanFailure(err)) {
+          addFailed(current, 'discover:' + reason);
+        } else {
+          addDiagnosticLog('SCAN', '跳过不可达页面: ' + current + ' (' + reason + ')');
+        }
         updateProgress();
         await sleep(options.requestDelayMs);
         continue;
       }
 
       try {
-        const pageDoc = new DOMParser().parseFromString(html, 'text/html');
+        const pageDoc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
         titles.set(current, extractDocTitle(pageDoc, current));
       } catch (_) {
         // keep fallback title
@@ -2915,14 +3202,19 @@
     }
 
     const startUrl = normalizeUrl(location.href) || location.href;
-    const docsRootPath = getDocRootPathFromUrl(startUrl);
+    const baseDocRootPath = getDocRootPathFromUrl(startUrl);
     const visibleLinks = collectVisibleLinksFromCurrentPage(startUrl);
     const categoryLinks = collectCategoryLinksFromCurrentPage(startUrl, {
-      docsRootPath,
+      docsRootPath: baseDocRootPath,
       excludePatterns: DEFAULT_EXCLUDES
     });
-    const categoryPathPrefixes = deriveCategoryPathPrefixes(startUrl, categoryLinks, docsRootPath);
     const navigationLinks = collectNavigationLinksFromCurrentPage(startUrl);
+    const docsRootPath = inferDocsRootPath(
+      startUrl,
+      categoryLinks.concat(navigationLinks, visibleLinks),
+      baseDocRootPath
+    );
+    const categoryPathPrefixes = deriveCategoryPathPrefixes(startUrl, categoryLinks, docsRootPath);
     state.scanStartUrl = startUrl;
     resetExportProgress();
     clearDiagnosticLogs();
@@ -3152,7 +3444,7 @@
           continue;
         }
 
-        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const doc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
         const title = extractDocTitle(doc, url);
         const path = buildMarkdownPath(url, title, exportRootPath, usedPaths);
 

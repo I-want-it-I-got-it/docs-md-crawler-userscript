@@ -114,6 +114,76 @@ test('parseLinksFromDocument skips nav/footer links and keeps main scope links',
   ]);
 });
 
+test('parseLinksFromDocument skips invalid hrefs and normalizes bare domains', () => {
+  const mainAnchors = [
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/docs/intro' : '';
+      },
+      closest() {
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? 'javascript:void(0)' : '';
+      },
+      closest() {
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? 'mailto:dev@example.com' : '';
+      },
+      closest() {
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? 'chat`' : '';
+      },
+      closest() {
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? 'openai.com' : '';
+      },
+      closest() {
+        return null;
+      }
+    }
+  ];
+
+  const mainScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? mainAnchors : [];
+    }
+  };
+  const mockDoc = {
+    body: {
+      querySelectorAll() {
+        return [];
+      }
+    },
+    querySelectorAll(selector) {
+      if (selector === 'main') {
+        return [mainScope];
+      }
+      return [];
+    }
+  };
+
+  const links = crawler.parseLinksFromDocument(mockDoc, 'https://example.com/docs/start');
+  assert.deepEqual(links, [
+    'https://example.com/docs/intro',
+    'https://openai.com/'
+  ]);
+});
+
 test('parseNavigationLinksFromDocument collects sidebar category links and skips header/footer noise', () => {
   const navAnchors = [
     {
@@ -303,6 +373,31 @@ test('inferDocRootPrefixes prefers article roots over generic category roots', (
     'https://example.com'
   );
   assert.deepEqual(roots, ['blog']);
+});
+
+test('inferDocsRootPath picks docs-like root on homepage and avoids generic fallback', () => {
+  assert.equal(
+    crawler.inferDocsRootPath(
+      'https://example.com/',
+      [
+        'https://example.com/docs/getting-started',
+        'https://example.com/docs/api/auth',
+        'https://example.com/settings',
+        'https://example.com/chat'
+      ],
+      '/'
+    ),
+    '/docs'
+  );
+
+  assert.equal(
+    crawler.inferDocsRootPath(
+      'https://example.com/',
+      ['https://example.com/settings', 'https://example.com/chat'],
+      '/'
+    ),
+    '/'
+  );
 });
 
 test('isLikelyDocUrlByStructure filters nav/list paths and keeps article-like paths', () => {
@@ -995,4 +1090,54 @@ test('computeGroupSelectionState returns checked and indeterminate for group des
     { checked: all.checked, indeterminate: all.indeterminate, total: all.total, selected: all.selected },
     { checked: true, indeterminate: false, total: 2, selected: 2 }
   );
+});
+
+test('shouldRecordScanFailure ignores expected 404 noise in discovery stage', () => {
+  assert.equal(crawler.shouldRecordScanFailure(new Error('http-404')), false);
+  assert.equal(crawler.shouldRecordScanFailure(new Error('http-410')), false);
+  assert.equal(crawler.shouldRecordScanFailure(new Error('http-500')), true);
+  assert.equal(crawler.shouldRecordScanFailure(new Error('request-timeout')), true);
+});
+
+test('toTrustedHtml uses policy output when policy is available', () => {
+  const calls = [];
+  const policy = {
+    createHTML(value) {
+      calls.push(value);
+      return { trusted: value };
+    }
+  };
+
+  const value = crawler.toTrustedHtml('<div>ok</div>', policy);
+  assert.deepEqual(value, { trusted: '<div>ok</div>' });
+  assert.deepEqual(calls, ['<div>ok</div>']);
+});
+
+test('parseHtmlDocument retries with trusted html when raw parse is blocked', () => {
+  const parseCalls = [];
+  class FakeDOMParser {
+    parseFromString(value, mimeType) {
+      parseCalls.push({ value, mimeType });
+      if (typeof value === 'string') {
+        throw new TypeError('TrustedHTML required');
+      }
+      return { mimeType, value };
+    }
+  }
+  const policy = {
+    createHTML(value) {
+      return { trusted: value };
+    }
+  };
+
+  const doc = crawler.parseHtmlDocument('<main>safe</main>', {
+    DOMParserCtor: FakeDOMParser,
+    trustedPolicy: policy
+  });
+
+  assert.equal(doc.mimeType, 'text/html');
+  assert.deepEqual(doc.value, { trusted: '<main>safe</main>' });
+  assert.equal(parseCalls.length, 2);
+  assert.equal(typeof parseCalls[0].value, 'string');
+  assert.deepEqual(parseCalls[1].value, { trusted: '<main>safe</main>' });
 });
