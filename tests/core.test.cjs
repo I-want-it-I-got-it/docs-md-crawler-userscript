@@ -1141,3 +1141,78 @@ test('parseHtmlDocument retries with trusted html when raw parse is blocked', ()
   assert.equal(typeof parseCalls[0].value, 'string');
   assert.deepEqual(parseCalls[1].value, { trusted: '<main>safe</main>' });
 });
+
+test('runWithConcurrency limits in-flight workers and keeps result order', async () => {
+  let active = 0;
+  let maxActive = 0;
+  const items = [1, 2, 3, 4, 5];
+
+  const results = await crawler.runWithConcurrency(items, 2, async (value) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 8));
+    active -= 1;
+    return value * 10;
+  });
+
+  assert.equal(maxActive, 2);
+  assert.deepEqual(results, [10, 20, 30, 40, 50]);
+});
+
+test('createHostRequestLimiter enforces per-host minimum request interval', async () => {
+  let now = 1000;
+  const sleepCalls = [];
+  const limiter = crawler.createHostRequestLimiter({
+    minIntervalMs: 40,
+    nowFn: () => now,
+    sleepFn: async (ms) => {
+      sleepCalls.push(ms);
+      now += ms;
+    }
+  });
+
+  await Promise.all([
+    limiter.wait('https://example.com/docs/a'),
+    limiter.wait('https://example.com/docs/b'),
+    limiter.wait('https://cdn.example.com/assets/logo.png')
+  ]);
+
+  assert.deepEqual(sleepCalls, [40]);
+});
+
+test('shouldRetryRequestError retries only transient failures', () => {
+  assert.equal(crawler.shouldRetryRequestError(new Error('timeout')), true);
+  assert.equal(crawler.shouldRetryRequestError(new Error('network-error')), true);
+  assert.equal(crawler.shouldRetryRequestError(new Error('http-429')), true);
+  assert.equal(crawler.shouldRetryRequestError(new Error('http-503')), true);
+  assert.equal(crawler.shouldRetryRequestError(new Error('http-404')), false);
+  assert.equal(crawler.shouldRetryRequestError(new Error('http-410')), false);
+  assert.equal(crawler.shouldRetryRequestError(new Error('unsupported-binary:[object Object]')), false);
+});
+
+test('shouldUseSitemapForDiscovery enables sitemap in directory-only scan mode', () => {
+  assert.equal(
+    crawler.shouldUseSitemapForDiscovery({
+      useSitemap: true,
+      crawlDescendantsOnly: true,
+      directoryOnly: false
+    }),
+    false
+  );
+  assert.equal(
+    crawler.shouldUseSitemapForDiscovery({
+      useSitemap: true,
+      crawlDescendantsOnly: true,
+      directoryOnly: true
+    }),
+    true
+  );
+  assert.equal(
+    crawler.shouldUseSitemapForDiscovery({
+      useSitemap: true,
+      crawlDescendantsOnly: false,
+      directoryOnly: false
+    }),
+    true
+  );
+});

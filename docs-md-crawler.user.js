@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.17
+// @version      0.2.18
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -29,9 +29,13 @@
   const DEFAULT_EXCLUDES = ['/api/', '/login', '/admin', 'token='];
   const DEFAULTS = {
     maxDepth: 6,
-    requestDelayMs: 300,
+    requestDelayMs: 120,
     timeoutMs: 15000,
-    retries: 2,
+    retries: 1,
+    minRequestIntervalMs: 100,
+    scanConcurrency: 6,
+    exportFetchConcurrency: 6,
+    imageConcurrency: 4,
     imageMode: 'external',
     zipPackTimeoutMs: 30000
   };
@@ -1201,6 +1205,133 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  async function runWithConcurrency(items, concurrency, worker) {
+    const list = Array.isArray(items) ? items : [];
+    const run = typeof worker === 'function' ? worker : async () => undefined;
+    if (!list.length) {
+      return [];
+    }
+
+    const limit = Math.max(1, Math.floor(Number(concurrency) || 1));
+    const workerCount = Math.min(limit, list.length);
+    const results = new Array(list.length);
+    let cursor = 0;
+
+    async function consume() {
+      while (cursor < list.length) {
+        const index = cursor;
+        cursor += 1;
+        results[index] = await run(list[index], index);
+      }
+    }
+
+    const runners = [];
+    for (let i = 0; i < workerCount; i += 1) {
+      runners.push(consume());
+    }
+    await Promise.all(runners);
+    return results;
+  }
+
+  function createHostRequestLimiter(options) {
+    const opts = options || {};
+    const minIntervalMs = Math.max(0, Math.floor(Number(opts.minIntervalMs) || 0));
+    const nowFn = typeof opts.nowFn === 'function' ? opts.nowFn : () => Date.now();
+    const sleepFn = typeof opts.sleepFn === 'function' ? opts.sleepFn : sleep;
+    const hostLocks = new Map();
+    const nextAllowedByHost = new Map();
+
+    function normalizeHostKey(url) {
+      try {
+        return new URL(url).host || '*';
+      } catch (_) {
+        return '*';
+      }
+    }
+
+    async function wait(url) {
+      if (minIntervalMs <= 0) {
+        return;
+      }
+      const host = normalizeHostKey(url);
+      const previous = hostLocks.get(host) || Promise.resolve();
+      let release = null;
+      const current = new Promise((resolve) => {
+        release = resolve;
+      });
+      hostLocks.set(host, current);
+      await previous;
+
+      try {
+        const now = Number(nowFn()) || 0;
+        const nextAllowed = Number(nextAllowedByHost.get(host)) || 0;
+        const delay = nextAllowed - now;
+        if (delay > 0) {
+          await sleepFn(delay);
+        }
+        nextAllowedByHost.set(host, (Number(nowFn()) || 0) + minIntervalMs);
+      } finally {
+        if (typeof release === 'function') {
+          release();
+        }
+        if (hostLocks.get(host) === current) {
+          hostLocks.delete(host);
+        }
+      }
+    }
+
+    return {
+      wait
+    };
+  }
+
+  function parseHttpStatusFromError(error) {
+    const message = String(error && error.message ? error.message : error || '').trim().toLowerCase();
+    const match = message.match(/^http-(\d{3})\b/);
+    if (!match) {
+      return 0;
+    }
+    return Number(match[1]) || 0;
+  }
+
+  function shouldRetryRequestError(error) {
+    const message = String(error && error.message ? error.message : error || '').trim().toLowerCase();
+    if (!message) {
+      return true;
+    }
+    if (
+      message === 'timeout' ||
+      message === 'network-error' ||
+      message === 'request-failed'
+    ) {
+      return true;
+    }
+    if (message.startsWith('unsupported-binary:')) {
+      return false;
+    }
+    const status = parseHttpStatusFromError(error);
+    if (!status) {
+      return true;
+    }
+    if (status === 408 || status === 425 || status === 429) {
+      return true;
+    }
+    if (status >= 500) {
+      return true;
+    }
+    return false;
+  }
+
+  function shouldUseSitemapForDiscovery(options) {
+    const opts = options || {};
+    if (opts.useSitemap !== true) {
+      return false;
+    }
+    const crawlDescendantsOnly = opts.crawlDescendantsOnly !== false;
+    const directoryOnly = opts.directoryOnly === true;
+    return directoryOnly || !crawlDescendantsOnly;
+  }
+
   function copyToUint8Array(view) {
     const source = view instanceof Uint8Array ? view : new Uint8Array(view);
     const copy = new Uint8Array(source.byteLength);
@@ -2048,6 +2179,10 @@
       buildUsageStatsMarkup,
       computeStopControlState,
       formatFailureReason,
+      runWithConcurrency,
+      createHostRequestLimiter,
+      shouldRetryRequestError,
+      shouldUseSitemapForDiscovery,
       normalizeBinaryPayload,
       generateZipBlobWithFallback,
       buildStoreZipBlob,
@@ -2086,7 +2221,8 @@
     exportSuccessTimer: 0,
     downloadObjectUrl: '',
     elements: {},
-    scanSession: 0
+    scanSession: 0,
+    scanHtmlCache: new Map()
   };
 
   function addStyles() {
@@ -2842,11 +2978,19 @@
     });
   }
 
-  async function fetchTextWithRetry(url, retries, delayMs) {
+  async function fetchTextWithRetry(url, retries, delayMs, options) {
+    const opts = options || {};
+    const requestLimiter = opts.requestLimiter;
+    const timeoutMs = Number(opts.timeoutMs) || DEFAULTS.timeoutMs;
+    const maxRetries = Math.max(0, Math.floor(Number(retries) || 0));
+    const backoffBaseMs = Math.max(0, Number(delayMs) || 0);
     let lastError = null;
-    for (let i = 0; i <= retries; i += 1) {
+    for (let i = 0; i <= maxRetries; i += 1) {
       try {
-        const resp = await gmRequest('GET', url, { timeoutMs: DEFAULTS.timeoutMs });
+        if (requestLimiter && typeof requestLimiter.wait === 'function') {
+          await requestLimiter.wait(url);
+        }
+        const resp = await gmRequest('GET', url, { timeoutMs });
         if (resp.status >= 200 && resp.status < 400) {
           return String(resp.responseText || '');
         }
@@ -2854,19 +2998,30 @@
       } catch (err) {
         lastError = err;
       }
-      if (i < retries) {
-        await sleep(delayMs * Math.pow(2, i));
+      if (i >= maxRetries || !shouldRetryRequestError(lastError)) {
+        break;
+      }
+      if (backoffBaseMs > 0) {
+        await sleep(backoffBaseMs * Math.pow(2, i));
       }
     }
     throw lastError || new Error('request-failed');
   }
 
-  async function fetchBinaryWithRetry(url, retries, delayMs) {
+  async function fetchBinaryWithRetry(url, retries, delayMs, options) {
+    const opts = options || {};
+    const requestLimiter = opts.requestLimiter;
+    const timeoutMs = Number(opts.timeoutMs) || DEFAULTS.timeoutMs;
+    const maxRetries = Math.max(0, Math.floor(Number(retries) || 0));
+    const backoffBaseMs = Math.max(0, Number(delayMs) || 0);
     let lastError = null;
-    for (let i = 0; i <= retries; i += 1) {
+    for (let i = 0; i <= maxRetries; i += 1) {
       try {
+        if (requestLimiter && typeof requestLimiter.wait === 'function') {
+          await requestLimiter.wait(url);
+        }
         const resp = await gmRequest('GET', url, {
-          timeoutMs: DEFAULTS.timeoutMs,
+          timeoutMs,
           responseType: 'arraybuffer'
         });
         if (resp.status >= 200 && resp.status < 400) {
@@ -2883,8 +3038,11 @@
       } catch (err) {
         lastError = err;
       }
-      if (i < retries) {
-        await sleep(delayMs * Math.pow(2, i));
+      if (i >= maxRetries || !shouldRetryRequestError(lastError)) {
+        break;
+      }
+      if (backoffBaseMs > 0) {
+        await sleep(backoffBaseMs * Math.pow(2, i));
       }
     }
     throw lastError || new Error('request-failed');
@@ -2898,10 +3056,14 @@
     return !/^http-(404|410)\b/.test(message);
   }
 
-  async function discoverSitemapUrls(origin) {
+  async function discoverSitemapUrls(origin, options) {
+    const opts = options || {};
     const candidates = [new URL('/sitemap.xml', origin).href];
     try {
-      const robots = await fetchTextWithRetry(new URL('/robots.txt', origin).href, 1, 400);
+      const robots = await fetchTextWithRetry(new URL('/robots.txt', origin).href, 1, 400, {
+        requestLimiter: opts.requestLimiter,
+        timeoutMs: opts.timeoutMs
+      });
       parseSitemapsFromRobots(robots, origin).forEach((url) => candidates.push(url));
     } catch (_) {
       // ignore robots parse failure
@@ -2921,7 +3083,10 @@
 
       let xmlText;
       try {
-        xmlText = await fetchTextWithRetry(sitemapUrl, 1, 500);
+        xmlText = await fetchTextWithRetry(sitemapUrl, 1, 500, {
+          requestLimiter: opts.requestLimiter,
+          timeoutMs: opts.timeoutMs
+        });
       } catch (_) {
         continue;
       }
@@ -2956,6 +3121,14 @@
     const origin = options.origin;
     const startUrl = normalizeUrl(options.startUrl || location.href);
     const maxDepth = options.maxDepth;
+    const retries = Number.isFinite(Number(options.retries)) ? Number(options.retries) : DEFAULTS.retries;
+    const requestDelayMs = Number.isFinite(Number(options.requestDelayMs))
+      ? Number(options.requestDelayMs)
+      : DEFAULTS.requestDelayMs;
+    const timeoutMs = Number(options.timeoutMs) || DEFAULTS.timeoutMs;
+    const concurrency = Math.max(1, Math.floor(Number(options.concurrency) || 1));
+    const requestLimiter = options.requestLimiter || null;
+    const htmlCache = options.htmlCache instanceof Map ? options.htmlCache : null;
     const excludePatterns = options.excludePatterns || [];
     const seedLinks = Array.isArray(options.seedLinks) ? options.seedLinks : [];
     const navigationSeedLinks = Array.isArray(options.navigationSeedLinks) ? options.navigationSeedLinks : [];
@@ -2964,8 +3137,13 @@
       ? options.categoryPathPrefixes.map((item) => normalizeRootPath(item)).filter(Boolean)
       : [];
     const docsRootPath = normalizeRootPath(options.docsRootPath || getDocRootPathFromUrl(startUrl));
+    const directoryOnly = options.directoryOnly === true;
     const crawlDescendantsOnly = options.crawlDescendantsOnly !== false;
-    const useSitemap = options.useSitemap === true && !crawlDescendantsOnly;
+    const useSitemap = shouldUseSitemapForDiscovery({
+      useSitemap: options.useSitemap,
+      crawlDescendantsOnly,
+      directoryOnly
+    });
     const followLinksInsideArticle = options.followLinksInsideArticle === true;
     const useContentLinks = options.useContentLinks === true;
     const crawlByStructure = options.crawlByStructure === true;
@@ -2973,7 +3151,10 @@
     let sitemapUrls = [];
     if (useSitemap) {
       try {
-        sitemapUrls = await discoverSitemapUrls(origin);
+        sitemapUrls = await discoverSitemapUrls(origin, {
+          requestLimiter,
+          timeoutMs
+        });
       } catch (_) {
         sitemapUrls = [];
       }
@@ -3049,73 +3230,94 @@
       sitemapUrls.forEach((sitemapUrl) => addUrl(sitemapUrl, 1, 'sitemap'));
     }
 
+    if (directoryOnly) {
+      state.queueCount = 0;
+      state.currentUrl = '';
+      updateProgress();
+      return Array.from(discovered).sort().map((url) => ({
+        url,
+        title: getDisplayTitle(url, titles.get(url) || '')
+      }));
+    }
+
     while (queue.length) {
       await waitIfPaused();
-      const current = queue.shift();
+      const batchSize = Math.min(queue.length, concurrency);
+      const batch = queue.splice(0, batchSize);
       state.queueCount = queue.length;
-      if (visited.has(current)) {
-        updateProgress();
-        continue;
-      }
-      visited.add(current);
-
-      const depth = depthMap.get(current) || 0;
-      if (depth >= maxDepth) {
-        updateProgress();
-        continue;
-      }
-
-      state.currentUrl = current;
       updateProgress();
 
-      let html;
-      try {
-        html = await fetchTextWithRetry(current, options.retries, options.requestDelayMs);
-      } catch (err) {
-        const reason = err && err.message ? err.message : 'failed';
-        if (shouldRecordScanFailure(err)) {
-          addFailed(current, 'discover:' + reason);
-        } else {
-          addDiagnosticLog('SCAN', '跳过不可达页面: ' + current + ' (' + reason + ')');
+      await runWithConcurrency(batch, concurrency, async (current) => {
+        await waitIfPaused();
+        state.queueCount = queue.length;
+        if (visited.has(current)) {
+          updateProgress();
+          return;
         }
+        visited.add(current);
+
+        const depth = depthMap.get(current) || 0;
+        if (depth >= maxDepth) {
+          updateProgress();
+          return;
+        }
+
+        state.currentUrl = current;
         updateProgress();
-        await sleep(options.requestDelayMs);
-        continue;
-      }
 
-      try {
-        const pageDoc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
-        titles.set(current, extractDocTitle(pageDoc, current));
-      } catch (_) {
-        // keep fallback title
-      }
-
-      const shouldExpand = shouldExpandLinksFromPage(current, {
-        followLinksInsideArticle
-      });
-
-      const categoryLinks = parseCategoryLinksFromHtml(html, current, {
-        docsRootPath,
-        excludePatterns
-      });
-      for (const categoryLink of categoryLinks) {
-        addUrl(categoryLink, depth + 1, 'category');
-      }
-
-      const navigationLinks = parseNavigationLinksFromHtml(html, current);
-      for (const navLink of navigationLinks) {
-        addUrl(navLink, depth + 1, 'nav');
-      }
-
-      const shouldExpandContent = useContentLinks && (crawlByStructure || shouldExpand);
-      if (shouldExpandContent) {
-        const links = parseLinksFromHtml(html, current);
-        for (const link of links) {
-          addUrl(link, depth + 1, 'crawl');
+        let html;
+        try {
+          html = await fetchTextWithRetry(current, retries, requestDelayMs, {
+            requestLimiter,
+            timeoutMs
+          });
+        } catch (err) {
+          const reason = err && err.message ? err.message : 'failed';
+          if (shouldRecordScanFailure(err)) {
+            addFailed(current, 'discover:' + reason);
+          } else {
+            addDiagnosticLog('SCAN', '跳过不可达页面: ' + current + ' (' + reason + ')');
+          }
+          updateProgress();
+          return;
         }
-      }
 
-      await sleep(options.requestDelayMs);
+        if (htmlCache) {
+          htmlCache.set(current, html);
+        }
+
+        try {
+          const pageDoc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
+          titles.set(current, extractDocTitle(pageDoc, current));
+        } catch (_) {
+          // keep fallback title
+        }
+
+        const shouldExpand = shouldExpandLinksFromPage(current, {
+          followLinksInsideArticle
+        });
+
+        const categoryLinks = parseCategoryLinksFromHtml(html, current, {
+          docsRootPath,
+          excludePatterns
+        });
+        for (const categoryLink of categoryLinks) {
+          addUrl(categoryLink, depth + 1, 'category');
+        }
+
+        const navigationLinks = parseNavigationLinksFromHtml(html, current);
+        for (const navLink of navigationLinks) {
+          addUrl(navLink, depth + 1, 'nav');
+        }
+
+        const shouldExpandContent = useContentLinks && (crawlByStructure || shouldExpand);
+        if (shouldExpandContent) {
+          const links = parseLinksFromHtml(html, current);
+          for (const link of links) {
+            addUrl(link, depth + 1, 'crawl');
+          }
+        }
+      });
     }
 
     return Array.from(discovered).sort().map((url) => ({
@@ -3222,7 +3424,7 @@
     addDiagnosticLog('SCAN', '文档根路径: ' + docsRootPath);
     addDiagnosticLog('SCAN', '顶部分类链接: ' + categoryLinks.length + '，左侧目录链接: ' + navigationLinks.length);
     addDiagnosticLog('SCAN', '分类路径前缀: ' + categoryPathPrefixes.join(', '));
-    addDiagnosticLog('SCAN', '扫描策略: 先定位主分类，再沿分类结构深度爬取');
+    addDiagnosticLog('SCAN', '扫描策略: 快速目录扫描（仅发现 URL，不抓取页面内容）');
     addDiagnosticLog('SCAN', '当前页面正文链接采集数量: ' + visibleLinks.length);
 
     state.scanning = true;
@@ -3239,6 +3441,7 @@
     state.scanSession += 1;
     const mySession = state.scanSession;
     state.discoveredUrls = [];
+    state.scanHtmlCache = new Map();
     state.failed = [];
     renderFailedQueue();
     updateFailToggle();
@@ -3248,10 +3451,18 @@
     state.queueCount = 0;
     state.currentUrl = '';
     state.doneCount = 0;
-    updateProgress('开始按分类结构深度扫描...');
+    updateProgress('开始快速扫描目录...');
     let scanSucceeded = false;
+    const requestLimiter = createHostRequestLimiter({
+      minIntervalMs: DEFAULTS.minRequestIntervalMs
+    });
 
     try {
+      addDiagnosticLog(
+        'SCAN',
+        '抓取参数: 并发 ' + DEFAULTS.scanConcurrency +
+        '，最小请求间隔 ' + DEFAULTS.minRequestIntervalMs + 'ms，重试 ' + DEFAULTS.retries
+      );
       const urls = await discoverUrls({
         origin: location.origin,
         startUrl,
@@ -3263,12 +3474,17 @@
         categoryPathPrefixes,
         docsRootPath,
         crawlDescendantsOnly: true,
-        useSitemap: false,
+        useSitemap: true,
+        directoryOnly: true,
         followLinksInsideArticle: true,
         useContentLinks: true,
         crawlByStructure: true,
+        concurrency: DEFAULTS.scanConcurrency,
+        timeoutMs: DEFAULTS.timeoutMs,
         requestDelayMs: DEFAULTS.requestDelayMs,
-        retries: DEFAULTS.retries
+        retries: DEFAULTS.retries,
+        requestLimiter,
+        htmlCache: state.scanHtmlCache
       });
 
       if (mySession !== state.scanSession) {
@@ -3281,8 +3497,8 @@
       renderTree(urls);
       state.queueCount = 0;
       state.currentUrl = '';
-      updateProgress('扫描完成，可勾选后导出');
-      addDiagnosticLog('SCAN', '扫描完成，发现页面: ' + urls.length);
+      updateProgress('目录扫描完成，可勾选后导出');
+      addDiagnosticLog('SCAN', '扫描完成，发现页面: ' + urls.length + '，缓存页面: ' + state.scanHtmlCache.size);
       scanSucceeded = true;
     } catch (err) {
       renderTree(state.discoveredUrls);
@@ -3299,7 +3515,11 @@
     }
   }
 
-  async function downloadImagesToZip(zip, imageJobs, onProgress, onSuccess, onAdded) {
+  async function downloadImagesToZip(zip, imageJobs, onProgress, onSuccess, onAdded, options) {
+    const opts = options || {};
+    const concurrency = Math.max(1, Math.floor(Number(opts.concurrency) || DEFAULTS.imageConcurrency));
+    const requestLimiter = opts.requestLimiter || null;
+    const timeoutMs = Number(opts.timeoutMs) || DEFAULTS.timeoutMs;
     const uniqueJobs = [];
     const seen = new Set();
     for (const job of imageJobs) {
@@ -3309,11 +3529,14 @@
       }
     }
 
-    for (let i = 0; i < uniqueJobs.length; i += 1) {
+    let completed = 0;
+    await runWithConcurrency(uniqueJobs, concurrency, async (job) => {
       await waitIfPaused();
-      const job = uniqueJobs[i];
       try {
-        const binary = await fetchBinaryWithRetry(job.url, DEFAULTS.retries, DEFAULTS.requestDelayMs);
+        const binary = await fetchBinaryWithRetry(job.url, DEFAULTS.retries, DEFAULTS.requestDelayMs, {
+          requestLimiter,
+          timeoutMs
+        });
         zip.file(job.path, binary, { binary: true });
         if (typeof onAdded === 'function') {
           onAdded(job.path, binary);
@@ -3324,11 +3547,11 @@
       } catch (err) {
         addFailed(job.url, 'image-download-fail:' + (err && err.message ? err.message : 'failed'));
       }
+      completed += 1;
       if (typeof onProgress === 'function') {
-        onProgress(i + 1, uniqueJobs.length);
+        onProgress(completed, uniqueJobs.length);
       }
-      await sleep(120);
-    }
+    });
   }
 
   async function runExport() {
@@ -3342,7 +3565,7 @@
         ? state.elements.imageModeSelect.value
         : DEFAULTS.imageMode
     );
-    const selected = selectedUrlsFromTree();
+    let selected = selectedUrlsFromTree();
 
     if (!selected.length) {
       alert('请先扫描并勾选至少一个页面');
@@ -3350,7 +3573,7 @@
     }
 
     clearDiagnosticLogs();
-    addDiagnosticLog('EXPORT', '开始导出，已选页面: ' + selected.length + '，图片模式: ' + imageMode);
+    addDiagnosticLog('EXPORT', '开始导出，已选目录: ' + selected.length + '，图片模式: ' + imageMode);
 
     state.exporting = true;
     resetPauseState();
@@ -3423,42 +3646,110 @@
     let zipInputTextBytes = 0;
     let zipInputBinaryBytes = 0;
     let exportSucceeded = false;
+    const requestLimiter = createHostRequestLimiter({
+      minIntervalMs: DEFAULTS.minRequestIntervalMs
+    });
+    const scanHtmlCache = state.scanHtmlCache instanceof Map ? state.scanHtmlCache : new Map();
 
     try {
+      addDiagnosticLog(
+        'EXPORT',
+        '抓取参数: 页面并发 ' + DEFAULTS.exportFetchConcurrency +
+        '，图片并发 ' + DEFAULTS.imageConcurrency +
+        '，最小请求间隔 ' + DEFAULTS.minRequestIntervalMs + 'ms，重试 ' + DEFAULTS.retries
+      );
+      const exportStartUrl = state.scanStartUrl || normalizeUrl(location.href) || location.href;
+      const exportDocsRootPath = getDocRootPathFromUrl(exportStartUrl);
+      const exportCategoryPrefixes = deriveCategoryPathPrefixes(exportStartUrl, selected, exportDocsRootPath);
+      addDiagnosticLog('EXPORT', '目录扩展中，候选前缀: ' + exportCategoryPrefixes.join(', '));
+      updateProgress('导出前扩展目录...');
+      try {
+        const expanded = await discoverUrls({
+          origin: location.origin,
+          startUrl: exportStartUrl,
+          maxDepth: DEFAULTS.maxDepth,
+          excludePatterns: DEFAULT_EXCLUDES,
+          seedLinks: selected,
+          navigationSeedLinks: [],
+          categorySeedLinks: selected,
+          categoryPathPrefixes: exportCategoryPrefixes,
+          docsRootPath: exportDocsRootPath,
+          crawlDescendantsOnly: true,
+          useSitemap: false,
+          directoryOnly: false,
+          followLinksInsideArticle: true,
+          useContentLinks: true,
+          crawlByStructure: true,
+          concurrency: DEFAULTS.scanConcurrency,
+          timeoutMs: DEFAULTS.timeoutMs,
+          requestDelayMs: DEFAULTS.requestDelayMs,
+          retries: DEFAULTS.retries,
+          requestLimiter,
+          htmlCache: scanHtmlCache
+        });
+        if (expanded.length) {
+          selected = expanded.map((item) => item.url);
+          addDiagnosticLog('EXPORT', '目录扩展完成: ' + selected.length + ' 个页面待导出');
+        } else {
+          addDiagnosticLog('EXPORT', '目录扩展为空，回退已勾选目录');
+        }
+      } catch (expandErr) {
+        addDiagnosticLog('WARN', '目录扩展失败，回退已勾选目录: ' + normalizeErrorMessage(expandErr, 'unknown'));
+      }
+
       updateExportStage('页面抓取', 0, selected.length);
+      const fetchedPages = new Array(selected.length);
       let fetchProcessed = 0;
-      for (let i = 0; i < selected.length; i += 1) {
+      let cacheHits = 0;
+      await runWithConcurrency(selected, DEFAULTS.exportFetchConcurrency, async (url, index) => {
         await waitIfPaused();
 
-        const url = selected[i];
-        let html;
+        const normalizedUrl = normalizeUrl(url) || url;
+        state.currentUrl = normalizedUrl;
         try {
-          html = await fetchTextWithRetry(url, DEFAULTS.retries, DEFAULTS.requestDelayMs);
+          let html;
+          if (scanHtmlCache.has(normalizedUrl)) {
+            html = String(scanHtmlCache.get(normalizedUrl) || '');
+            cacheHits += 1;
+          } else {
+            html = await fetchTextWithRetry(normalizedUrl, DEFAULTS.retries, DEFAULTS.requestDelayMs, {
+              requestLimiter,
+              timeoutMs: DEFAULTS.timeoutMs
+            });
+            scanHtmlCache.set(normalizedUrl, html);
+          }
           exportStats.pageFetched += 1;
           exportStats.htmlBytes += new TextEncoder().encode(html).length;
+          const doc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
+          const title = extractDocTitle(doc, normalizedUrl);
+          fetchedPages[index] = {
+            url: normalizedUrl,
+            doc,
+            title
+          };
         } catch (err) {
-          const matched = state.discoveredUrls.find((item) => item.url === url);
-          addFailed(url, 'page-fetch-fail:' + (err && err.message ? err.message : 'failed'), matched ? matched.title : '');
+          const matched = state.discoveredUrls.find((item) => item.url === normalizedUrl);
+          addFailed(normalizedUrl, 'page-fetch-fail:' + (err && err.message ? err.message : 'failed'), matched ? matched.title : '');
+        } finally {
           fetchProcessed += 1;
           updateExportStage('页面抓取', fetchProcessed, selected.length);
+        }
+      });
+
+      for (let i = 0; i < fetchedPages.length; i += 1) {
+        const page = fetchedPages[i];
+        if (!page) {
           continue;
         }
-
-        const doc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
-        const title = extractDocTitle(doc, url);
-        const path = buildMarkdownPath(url, title, exportRootPath, usedPaths);
-
+        const path = buildMarkdownPath(page.url, page.title, exportRootPath, usedPaths);
         pageDrafts.push({
-          url,
-          doc,
-          title,
+          url: page.url,
+          doc: page.doc,
+          title: page.title,
           path
         });
-
-        fetchProcessed += 1;
-        updateExportStage('页面抓取', fetchProcessed, selected.length);
-        await sleep(DEFAULTS.requestDelayMs);
       }
+      addDiagnosticLog('EXPORT', '扫描缓存命中: ' + cacheHits + '/' + selected.length);
 
       const urlToFilePath = new Map();
       for (const page of pageDrafts) {
@@ -3526,6 +3817,7 @@
       if (imageMode === 'local') {
         updateExportStage('图片下载', 0, imageJobs.length);
         if (imageJobs.length) {
+          addDiagnosticLog('EXPORT', '本地图片下载任务: ' + imageJobs.length + '，并发 ' + DEFAULTS.imageConcurrency);
           await downloadImagesToZip(
             zip,
             imageJobs,
@@ -3544,6 +3836,11 @@
               });
               zipInputCount += 1;
               zipInputBinaryBytes += normalizedBinary.byteLength;
+            },
+            {
+              concurrency: DEFAULTS.imageConcurrency,
+              requestLimiter,
+              timeoutMs: DEFAULTS.timeoutMs
             }
           );
         }
