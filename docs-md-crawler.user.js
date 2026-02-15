@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.18
+// @version      0.2.17
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -34,7 +34,6 @@
     retries: 1,
     minRequestIntervalMs: 100,
     scanConcurrency: 6,
-    directoryProbeLimit: 48,
     exportFetchConcurrency: 6,
     imageConcurrency: 4,
     imageMode: 'external',
@@ -3128,14 +3127,6 @@
       : DEFAULTS.requestDelayMs;
     const timeoutMs = Number(options.timeoutMs) || DEFAULTS.timeoutMs;
     const concurrency = Math.max(1, Math.floor(Number(options.concurrency) || 1));
-    const directoryProbeLimit = Math.max(
-      0,
-      Math.floor(
-        Number.isFinite(Number(options.directoryProbeLimit))
-          ? Number(options.directoryProbeLimit)
-          : DEFAULTS.directoryProbeLimit
-      )
-    );
     const requestLimiter = options.requestLimiter || null;
     const htmlCache = options.htmlCache instanceof Map ? options.htmlCache : null;
     const excludePatterns = options.excludePatterns || [];
@@ -3203,12 +3194,7 @@
           return;
         }
       }
-      if (
-        !directoryOnly &&
-        source !== 'start' &&
-        categoryPathPrefixes.length &&
-        !matchesAnyPathPrefix(normalized, categoryPathPrefixes)
-      ) {
+      if (source !== 'start' && categoryPathPrefixes.length && !matchesAnyPathPrefix(normalized, categoryPathPrefixes)) {
         return;
       }
 
@@ -3244,8 +3230,17 @@
       sitemapUrls.forEach((sitemapUrl) => addUrl(sitemapUrl, 1, 'sitemap'));
     }
 
-    let probeCount = 0;
-    while (queue.length && (!directoryOnly || probeCount < directoryProbeLimit)) {
+    if (directoryOnly) {
+      state.queueCount = 0;
+      state.currentUrl = '';
+      updateProgress();
+      return Array.from(discovered).sort().map((url) => ({
+        url,
+        title: getDisplayTitle(url, titles.get(url) || '')
+      }));
+    }
+
+    while (queue.length) {
       await waitIfPaused();
       const batchSize = Math.min(queue.length, concurrency);
       const batch = queue.splice(0, batchSize);
@@ -3265,14 +3260,6 @@
         if (depth >= maxDepth) {
           updateProgress();
           return;
-        }
-
-        if (directoryOnly && probeCount >= directoryProbeLimit) {
-          updateProgress();
-          return;
-        }
-        if (directoryOnly) {
-          probeCount += 1;
         }
 
         state.currentUrl = current;
@@ -3299,13 +3286,11 @@
           htmlCache.set(current, html);
         }
 
-        if (!directoryOnly) {
-          try {
-            const pageDoc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
-            titles.set(current, extractDocTitle(pageDoc, current));
-          } catch (_) {
-            // keep fallback title
-          }
+        try {
+          const pageDoc = parseHtmlDocument(html, { trustedPolicy: trustedHtmlPolicy });
+          titles.set(current, extractDocTitle(pageDoc, current));
+        } catch (_) {
+          // keep fallback title
         }
 
         const shouldExpand = shouldExpandLinksFromPage(current, {
@@ -3325,7 +3310,7 @@
           addUrl(navLink, depth + 1, 'nav');
         }
 
-        const shouldExpandContent = useContentLinks && (crawlByStructure || shouldExpand || directoryOnly);
+        const shouldExpandContent = useContentLinks && (crawlByStructure || shouldExpand);
         if (shouldExpandContent) {
           const links = parseLinksFromHtml(html, current);
           for (const link of links) {
@@ -3334,13 +3319,6 @@
         }
       });
     }
-
-    if (directoryOnly && queue.length) {
-      addDiagnosticLog('SCAN', '快速补全达到探测上限，剩余待探测: ' + queue.length);
-    }
-    state.queueCount = 0;
-    state.currentUrl = '';
-    updateProgress();
 
     return Array.from(discovered).sort().map((url) => ({
       url,
@@ -3483,9 +3461,7 @@
       addDiagnosticLog(
         'SCAN',
         '抓取参数: 并发 ' + DEFAULTS.scanConcurrency +
-        '，最小请求间隔 ' + DEFAULTS.minRequestIntervalMs +
-        'ms，重试 ' + DEFAULTS.retries +
-        '，快速补全探测上限 ' + DEFAULTS.directoryProbeLimit
+        '，最小请求间隔 ' + DEFAULTS.minRequestIntervalMs + 'ms，重试 ' + DEFAULTS.retries
       );
       const urls = await discoverUrls({
         origin: location.origin,
@@ -3504,7 +3480,6 @@
         useContentLinks: true,
         crawlByStructure: true,
         concurrency: DEFAULTS.scanConcurrency,
-        directoryProbeLimit: DEFAULTS.directoryProbeLimit,
         timeoutMs: DEFAULTS.timeoutMs,
         requestDelayMs: DEFAULTS.requestDelayMs,
         retries: DEFAULTS.retries,
@@ -3685,10 +3660,7 @@
       );
       const exportStartUrl = state.scanStartUrl || normalizeUrl(location.href) || location.href;
       const exportDocsRootPath = getDocRootPathFromUrl(exportStartUrl);
-      const selectedAllFromScan = state.discoveredUrls.length > 0 && selected.length >= state.discoveredUrls.length;
-      const exportCategoryPrefixes = selectedAllFromScan
-        ? [normalizeRootPath(exportDocsRootPath)]
-        : deriveCategoryPathPrefixes(exportStartUrl, selected, exportDocsRootPath);
+      const exportCategoryPrefixes = deriveCategoryPathPrefixes(exportStartUrl, selected, exportDocsRootPath);
       addDiagnosticLog('EXPORT', '目录扩展中，候选前缀: ' + exportCategoryPrefixes.join(', '));
       updateProgress('导出前扩展目录...');
       try {
