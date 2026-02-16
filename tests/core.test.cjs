@@ -320,6 +320,62 @@ test('parseCategoryLinksFromDocument collects top category links under docs root
   ]);
 });
 
+test('parseCategoryLinksFromDocument captures dropdown menu links in generic nav container', () => {
+  const menuAnchors = [
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/api/docs' : '';
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/api/reference/overview' : '';
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/chatgpt' : '';
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/resources' : '';
+      }
+    }
+  ];
+
+  const navScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? menuAnchors : [];
+    }
+  };
+
+  const mockDoc = {
+    querySelectorAll(selector) {
+      if (selector === 'nav') {
+        return [navScope];
+      }
+      return [];
+    }
+  };
+
+  const links = crawler.parseCategoryLinksFromDocument(
+    mockDoc,
+    'https://developers.openai.com/',
+    {
+      docsRootPath: '/',
+      excludePatterns: []
+    }
+  );
+
+  assert.deepEqual(links, [
+    'https://developers.openai.com/api/docs',
+    'https://developers.openai.com/api/reference/overview',
+    'https://developers.openai.com/chatgpt',
+    'https://developers.openai.com/resources'
+  ]);
+});
+
 test('deriveCategoryPathPrefixes builds crawl prefixes from main category links', () => {
   const prefixes = crawler.deriveCategoryPathPrefixes(
     'https://example.com/docs/start',

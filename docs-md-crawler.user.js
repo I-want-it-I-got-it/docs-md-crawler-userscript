@@ -26,7 +26,7 @@
 })(function main(env) {
   'use strict';
 
-  const DEFAULT_EXCLUDES = ['/api/', '/login', '/admin', 'token='];
+  const DEFAULT_EXCLUDES = ['/login', '/admin', 'token='];
   const DEFAULTS = {
     maxDepth: 6,
     requestDelayMs: 120,
@@ -1509,7 +1509,11 @@
       '.site-nav',
       '.docs-nav',
       '.navbar',
-      'nav[aria-label*="category" i]'
+      'nav[aria-label*="category" i]',
+      'nav[aria-label*="main" i]',
+      'nav[aria-label*="global" i]',
+      '[role="menu"]',
+      'nav'
     ];
 
     selectors.forEach((selector) => {
