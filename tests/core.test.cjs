@@ -184,6 +184,63 @@ test('parseLinksFromDocument skips invalid hrefs and normalizes bare domains', (
   ]);
 });
 
+test('parseLinkEntriesFromDocument prefers heading-like title over long paragraph excerpt', () => {
+  const anchor = {
+    getAttribute(name) {
+      return name === 'href' ? '/posts/agent-title' : '';
+    },
+    closest() {
+      return null;
+    },
+    textContent: 'Build Agent Pipelines This article explains how to build agent pipelines step by step with detailed examples and extra context.',
+    querySelectorAll(selector) {
+      if (selector === 'h1,h2,h3,h4,h5,h6') {
+        return [
+          {
+            textContent: 'Build Agent Pipelines'
+          }
+        ];
+      }
+      if (selector === 'p,span') {
+        return [
+          {
+            textContent: 'This article explains how to build agent pipelines step by step with detailed examples and extra context.'
+          }
+        ];
+      }
+      return [];
+    }
+  };
+
+  const mainScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? [anchor] : [];
+    }
+  };
+
+  const mockDoc = {
+    body: {
+      querySelectorAll() {
+        return [];
+      }
+    },
+    querySelectorAll(selector) {
+      if (selector === 'main') {
+        return [mainScope];
+      }
+      return [];
+    }
+  };
+
+  const entries = crawler.parseLinkEntriesFromDocument(mockDoc, 'https://aiagentskit.com/categories/code-snippets/');
+  assert.deepEqual(entries, [
+    {
+      url: 'https://aiagentskit.com/posts/agent-title',
+      title: 'Build Agent Pipelines'
+    }
+  ]);
+});
+
 test('parseNavigationLinksFromDocument collects sidebar category links and skips header/footer noise', () => {
   const navAnchors = [
     {

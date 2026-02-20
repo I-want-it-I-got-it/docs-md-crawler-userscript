@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.18
+// @version      0.2.19
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -1853,33 +1853,168 @@
       .trim();
   }
 
+  function hasCjkText(value) {
+    return /[\u3400-\u9fff]/.test(String(value || ''));
+  }
+
+  function isMostlyAsciiText(value) {
+    const text = String(value || '').replace(/\s+/g, '');
+    if (!text) {
+      return false;
+    }
+    let asciiCount = 0;
+    for (let i = 0; i < text.length; i += 1) {
+      if (text.charCodeAt(i) <= 0x7f) {
+        asciiCount += 1;
+      }
+    }
+    return asciiCount / text.length >= 0.85;
+  }
+
+  function isLikelyParagraphText(value) {
+    const text = String(value || '').trim();
+    if (!text) {
+      return false;
+    }
+    if (text.length >= 120) {
+      return true;
+    }
+    const punctuationCount = (text.match(/[，。！？；：,.!?;:]/g) || []).length;
+    if (text.length >= 60 && punctuationCount >= 2) {
+      return true;
+    }
+    return false;
+  }
+
   function extractNodeText(node) {
     if (!node) {
       return '';
     }
     if (typeof node.cloneNode === 'function' && typeof node.querySelectorAll === 'function') {
       const clone = node.cloneNode(true);
-      clone.querySelectorAll('rt').forEach((el) => el.remove());
+      clone.querySelectorAll('script,style,noscript,.visually-hidden,.sr-only,[aria-hidden="true"],[hidden]').forEach((el) => el.remove());
+      clone.querySelectorAll('ruby').forEach((ruby) => {
+        const rbText = normalizeInlineText(
+          Array.from(ruby.querySelectorAll('rb'))
+            .map((el) => el.textContent || '')
+            .join(' ')
+        );
+        const rtText = normalizeInlineText(
+          Array.from(ruby.querySelectorAll('rt'))
+            .map((el) => el.textContent || '')
+            .join(' ')
+        );
+        let picked = rbText || rtText || normalizeInlineText(ruby.textContent || '');
+        if (rtText && rbText && hasCjkText(rtText) && !hasCjkText(rbText) && isMostlyAsciiText(rbText)) {
+          picked = rtText;
+        }
+        const ownerDoc = clone.ownerDocument || (typeof document !== 'undefined' ? document : null);
+        if (ownerDoc && typeof ownerDoc.createTextNode === 'function' && typeof ruby.replaceWith === 'function') {
+          ruby.replaceWith(ownerDoc.createTextNode(picked));
+        } else {
+          ruby.textContent = picked;
+        }
+      });
+      clone.querySelectorAll('rt,relin-rt').forEach((el) => el.remove());
       return normalizeInlineText(clone.textContent || '');
     }
     return normalizeInlineText(node.textContent || '');
+  }
+
+  function scoreAnchorTitleCandidate(text, sourceType) {
+    let score = 0;
+    const type = String(sourceType || '').toLowerCase();
+    if (type === 'data-title') {
+      score += 90;
+    } else if (type === 'heading') {
+      score += 80;
+    } else if (type === 'title-class') {
+      score += 70;
+    } else if (type === 'text-class') {
+      score += 55;
+    } else if (type === 'emphasis') {
+      score += 35;
+    } else if (type === 'paragraph') {
+      score += 20;
+    }
+
+    if (text.length <= 48) {
+      score += 12;
+    } else if (text.length >= 100) {
+      score -= 24;
+    }
+
+    if (isLikelyParagraphText(text)) {
+      score -= 30;
+    }
+
+    return score;
   }
 
   function extractAnchorTitle(anchor) {
     if (!anchor) {
       return '';
     }
-    if (typeof anchor.querySelector === 'function') {
-      const selectors = ['[data-docs-md-title]', '.text', '.link-text', 'p', 'span'];
-      for (const selector of selectors) {
-        const node = anchor.querySelector(selector);
-        const text = extractNodeText(node);
-        if (text) {
-          return text;
-        }
+    const candidates = [];
+    const seenNodes = new Set();
+    if (typeof anchor.querySelectorAll === 'function') {
+      const selectorPlan = [
+        { selector: '[data-docs-md-title]', type: 'data-title' },
+        { selector: 'h1,h2,h3,h4,h5,h6', type: 'heading' },
+        { selector: '[class*="title" i],[class*="heading" i],.title,.heading', type: 'title-class' },
+        { selector: '.text,.link-text', type: 'text-class' },
+        { selector: 'strong,b', type: 'emphasis' },
+        { selector: 'p,span', type: 'paragraph' }
+      ];
+
+      selectorPlan.forEach(({ selector, type }) => {
+        anchor.querySelectorAll(selector).forEach((node) => {
+          if (!node || seenNodes.has(node)) {
+            return;
+          }
+          seenNodes.add(node);
+          const text = extractNodeText(node);
+          if (!text) {
+            return;
+          }
+          candidates.push({
+            text,
+            score: scoreAnchorTitleCandidate(text, type)
+          });
+        });
+      });
+    }
+
+    const anchorText = extractNodeText(anchor);
+    if (anchorText) {
+      candidates.push({
+        text: anchorText,
+        score: scoreAnchorTitleCandidate(anchorText, 'anchor')
+      });
+    }
+
+    if (!candidates.length) {
+      return '';
+    }
+
+    candidates.sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      if (a.text.length !== b.text.length) {
+        return a.text.length - b.text.length;
+      }
+      return a.text.localeCompare(b.text);
+    });
+
+    for (const item of candidates) {
+      const text = item.text;
+      if (text && text.length <= 180) {
+        return text;
       }
     }
-    return extractNodeText(anchor);
+
+    return candidates[0].text || '';
   }
 
   function parseLinkEntriesFromDocument(doc, baseUrl, options) {
