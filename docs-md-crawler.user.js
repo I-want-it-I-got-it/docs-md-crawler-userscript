@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.19
+// @version      0.2.20
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -1684,6 +1684,75 @@
     return '/' + topRoot;
   }
 
+  function inferScanDocsRootPath(startUrl, seedUrls, fallbackPath) {
+    const fallback = normalizeRootPath(fallbackPath || getDocRootPathFromUrl(startUrl));
+    const inputs = Array.isArray(seedUrls) ? seedUrls : [];
+    if (!inputs.length) {
+      return fallback;
+    }
+
+    let origin = '';
+    try {
+      origin = new URL(startUrl).origin;
+    } catch (_) {
+      return fallback;
+    }
+
+    const rootCount = new Map();
+    inputs.forEach((rawUrl) => {
+      const normalized = normalizeUrl(rawUrl);
+      if (!normalized) {
+        return;
+      }
+      try {
+        const u = new URL(normalized);
+        if (u.origin !== origin) {
+          return;
+        }
+        const segments = splitPathSegments(u.pathname).map((item) => item.toLowerCase());
+        if (!segments.length) {
+          return;
+        }
+        const root = segments[0];
+        if (!root) {
+          return;
+        }
+        rootCount.set(root, (rootCount.get(root) || 0) + 1);
+      } catch (_) {
+        // ignore invalid URL
+      }
+    });
+
+    if (!rootCount.size) {
+      return fallback;
+    }
+
+    if (rootCount.size > 1) {
+      let total = 0;
+      let maxRoot = '';
+      let maxCount = 0;
+      rootCount.forEach((count, root) => {
+        total += count;
+        if (count > maxCount) {
+          maxCount = count;
+          maxRoot = root;
+        }
+      });
+
+      const dominance = total > 0 ? maxCount / total : 0;
+      if (maxRoot && (dominance >= 0.85 || DOCS_ROOT_HINT_SEGMENTS.has(maxRoot))) {
+        return '/' + maxRoot;
+      }
+      return '/';
+    }
+
+    const onlyRoot = Array.from(rootCount.keys())[0];
+    if (!onlyRoot) {
+      return fallback;
+    }
+    return '/' + onlyRoot;
+  }
+
   function deriveCategoryPathPrefixes(startUrl, categoryUrls, docsRootPath) {
     const rootPath = normalizeRootPath(docsRootPath || getDocRootPathFromUrl(startUrl));
     const prefixes = new Set();
@@ -1956,6 +2025,37 @@
       return '';
     }
     const candidates = [];
+
+    if (typeof anchor.getAttribute === 'function') {
+      const ariaLabel = normalizeInlineText(anchor.getAttribute('aria-label') || '');
+      if (ariaLabel) {
+        candidates.push({
+          text: ariaLabel,
+          score: scoreAnchorTitleCandidate(ariaLabel, 'data-title')
+        });
+      }
+      const titleAttr = normalizeInlineText(anchor.getAttribute('title') || '');
+      if (titleAttr) {
+        candidates.push({
+          text: titleAttr,
+          score: scoreAnchorTitleCandidate(titleAttr, 'title-class')
+        });
+      }
+    }
+
+    if (typeof anchor.closest === 'function') {
+      const titleContainer = anchor.closest('[data-title]');
+      if (titleContainer && typeof titleContainer.getAttribute === 'function') {
+        const dataTitle = normalizeInlineText(titleContainer.getAttribute('data-title') || '');
+        if (dataTitle) {
+          candidates.push({
+            text: dataTitle,
+            score: scoreAnchorTitleCandidate(dataTitle, 'data-title') + 20
+          });
+        }
+      }
+    }
+
     const seenNodes = new Set();
     if (typeof anchor.querySelectorAll === 'function') {
       const selectorPlan = [
@@ -2409,6 +2509,7 @@
       matchesAnyPathPrefix,
       inferDocRootPrefixes,
       inferDocsRootPath,
+      inferScanDocsRootPath,
       isLikelyDocUrlByStructure,
       matchesDocRootPrefix,
       shouldExpandLinksFromPage,
@@ -3674,7 +3775,7 @@
     const scanSeedEntries = hasNavigationEntries ? navigationEntries : fallbackVisibleEntries;
     const scanSeedLinks = scanSeedEntries.map((item) => item.url);
     const docsRootPath = hasNavigationEntries
-      ? inferDocsRootPath(startUrl, scanSeedLinks, baseDocRootPath)
+      ? inferScanDocsRootPath(startUrl, scanSeedLinks, baseDocRootPath)
       : '/';
     const categoryPathPrefixes = hasNavigationEntries
       ? deriveCategoryPathPrefixes(startUrl, scanSeedLinks, docsRootPath)

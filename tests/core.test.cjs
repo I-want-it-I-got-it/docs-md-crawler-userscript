@@ -489,6 +489,46 @@ test('parseNavigationEntriesFromDocument keeps sidebar anchor text as title', ()
   ]);
 });
 
+test('parseNavigationEntriesFromDocument prefers ancestor data-title when available', () => {
+  const titleContainer = {
+    getAttribute(name) {
+      return name === 'data-title' ? 'Other (manual)' : '';
+    }
+  };
+
+  const sidebarAnchors = [
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/frameworks/manual' : '';
+      },
+      textContent: 'Other (manual说明书)',
+      closest(selector) {
+        return selector === '[data-title]' ? titleContainer : null;
+      }
+    }
+  ];
+
+  const sidebarScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? sidebarAnchors : [];
+    }
+  };
+
+  const mockDoc = {
+    querySelectorAll(selector) {
+      if (selector === '.VPSidebar') {
+        return [sidebarScope];
+      }
+      return [];
+    }
+  };
+
+  const entries = crawler.parseNavigationEntriesFromDocument(mockDoc, 'https://docs.subframe.com/overview');
+  assert.deepEqual(entries, [
+    { url: 'https://docs.subframe.com/frameworks/manual', title: 'Other (manual)' }
+  ]);
+});
+
 test('parseCategoryLinksFromDocument collects top category links under docs root', () => {
   const categoryAnchors = [
     {
@@ -686,6 +726,36 @@ test('inferDocsRootPath picks docs-like root on homepage and avoids generic fall
       '/'
     ),
     '/'
+  );
+});
+
+test('inferScanDocsRootPath falls back to slash when navigation roots are mixed', () => {
+  assert.equal(
+    crawler.inferScanDocsRootPath(
+      'https://docs.subframe.com/overview',
+      [
+        'https://docs.subframe.com/overview',
+        'https://docs.subframe.com/installation',
+        'https://docs.subframe.com/concepts/code-generation',
+        'https://docs.subframe.com/guides/skills',
+        'https://docs.subframe.com/frameworks/vite'
+      ],
+      '/overview'
+    ),
+    '/'
+  );
+
+  assert.equal(
+    crawler.inferScanDocsRootPath(
+      'https://developers.openai.com/codex',
+      [
+        'https://developers.openai.com/codex',
+        'https://developers.openai.com/codex/quickstart',
+        'https://developers.openai.com/codex/cli/reference'
+      ],
+      '/codex'
+    ),
+    '/codex'
   );
 });
 
