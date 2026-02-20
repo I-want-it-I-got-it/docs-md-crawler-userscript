@@ -1465,6 +1465,28 @@
     }
     const scopes = [];
     const seen = new Set();
+    const leftNavSelectors = [
+      '[data-left-nav-container] [data-left-nav]',
+      'nav[data-left-nav]',
+      '[data-left-nav]',
+      '[data-left-nav-id]',
+      '[data-left-nav-container]'
+    ];
+
+    leftNavSelectors.forEach((selector) => {
+      doc.querySelectorAll(selector).forEach((node) => {
+        if (!node || seen.has(node)) {
+          return;
+        }
+        seen.add(node);
+        scopes.push(node);
+      });
+    });
+
+    if (scopes.length) {
+      return scopes;
+    }
+
     const selectors = [
       'aside nav',
       'aside',
@@ -3409,27 +3431,21 @@
 
     const startUrl = normalizeUrl(location.href) || location.href;
     const baseDocRootPath = getDocRootPathFromUrl(startUrl);
-    const visibleLinks = collectVisibleLinksFromCurrentPage(startUrl);
-    const categoryLinks = collectCategoryLinksFromCurrentPage(startUrl, {
-      docsRootPath: baseDocRootPath,
-      excludePatterns: DEFAULT_EXCLUDES
-    });
     const navigationLinks = collectNavigationLinksFromCurrentPage(startUrl);
     const docsRootPath = inferDocsRootPath(
       startUrl,
-      categoryLinks.concat(navigationLinks, visibleLinks),
+      navigationLinks,
       baseDocRootPath
     );
-    const categoryPathPrefixes = deriveCategoryPathPrefixes(startUrl, categoryLinks, docsRootPath);
+    const categoryPathPrefixes = deriveCategoryPathPrefixes(startUrl, navigationLinks, docsRootPath);
     state.scanStartUrl = startUrl;
     resetExportProgress();
     clearDiagnosticLogs();
     addDiagnosticLog('SCAN', '开始扫描，起始地址: ' + startUrl);
     addDiagnosticLog('SCAN', '文档根路径: ' + docsRootPath);
-    addDiagnosticLog('SCAN', '顶部分类链接: ' + categoryLinks.length + '，左侧目录链接: ' + navigationLinks.length);
+    addDiagnosticLog('SCAN', '左侧目录链接: ' + navigationLinks.length);
     addDiagnosticLog('SCAN', '分类路径前缀: ' + categoryPathPrefixes.join(', '));
-    addDiagnosticLog('SCAN', '扫描策略: 快速目录扫描（仅发现 URL，不抓取页面内容）');
-    addDiagnosticLog('SCAN', '当前页面正文链接采集数量: ' + visibleLinks.length);
+    addDiagnosticLog('SCAN', '扫描策略: 基于左侧目录快速扫描（仅发现 URL，不抓取页面内容）');
 
     state.scanning = true;
     resetPauseState();
@@ -3472,17 +3488,17 @@
         startUrl,
         maxDepth: DEFAULTS.maxDepth,
         excludePatterns: DEFAULT_EXCLUDES,
-        seedLinks: visibleLinks,
-        navigationSeedLinks: navigationLinks,
-        categorySeedLinks: categoryLinks,
+        seedLinks: navigationLinks,
+        navigationSeedLinks: [],
+        categorySeedLinks: navigationLinks,
         categoryPathPrefixes,
         docsRootPath,
         crawlDescendantsOnly: true,
-        useSitemap: true,
+        useSitemap: false,
         directoryOnly: true,
-        followLinksInsideArticle: true,
-        useContentLinks: true,
-        crawlByStructure: true,
+        followLinksInsideArticle: false,
+        useContentLinks: false,
+        crawlByStructure: false,
         concurrency: DEFAULTS.scanConcurrency,
         timeoutMs: DEFAULTS.timeoutMs,
         requestDelayMs: DEFAULTS.requestDelayMs,
@@ -3665,41 +3681,10 @@
       const exportStartUrl = state.scanStartUrl || normalizeUrl(location.href) || location.href;
       const exportDocsRootPath = getDocRootPathFromUrl(exportStartUrl);
       const exportCategoryPrefixes = deriveCategoryPathPrefixes(exportStartUrl, selected, exportDocsRootPath);
-      addDiagnosticLog('EXPORT', '目录扩展中，候选前缀: ' + exportCategoryPrefixes.join(', '));
-      updateProgress('导出前扩展目录...');
-      try {
-        const expanded = await discoverUrls({
-          origin: location.origin,
-          startUrl: exportStartUrl,
-          maxDepth: DEFAULTS.maxDepth,
-          excludePatterns: DEFAULT_EXCLUDES,
-          seedLinks: selected,
-          navigationSeedLinks: [],
-          categorySeedLinks: selected,
-          categoryPathPrefixes: exportCategoryPrefixes,
-          docsRootPath: exportDocsRootPath,
-          crawlDescendantsOnly: true,
-          useSitemap: false,
-          directoryOnly: false,
-          followLinksInsideArticle: true,
-          useContentLinks: true,
-          crawlByStructure: true,
-          concurrency: DEFAULTS.scanConcurrency,
-          timeoutMs: DEFAULTS.timeoutMs,
-          requestDelayMs: DEFAULTS.requestDelayMs,
-          retries: DEFAULTS.retries,
-          requestLimiter,
-          htmlCache: scanHtmlCache
-        });
-        if (expanded.length) {
-          selected = expanded.map((item) => item.url);
-          addDiagnosticLog('EXPORT', '目录扩展完成: ' + selected.length + ' 个页面待导出');
-        } else {
-          addDiagnosticLog('EXPORT', '目录扩展为空，回退已勾选目录');
-        }
-      } catch (expandErr) {
-        addDiagnosticLog('WARN', '目录扩展失败，回退已勾选目录: ' + normalizeErrorMessage(expandErr, 'unknown'));
-      }
+      selected = Array.from(new Set(selected.map((url) => normalizeUrl(url)).filter(Boolean)));
+      addDiagnosticLog('EXPORT', '按左侧目录勾选导出，候选前缀: ' + exportCategoryPrefixes.join(', '));
+      addDiagnosticLog('EXPORT', '待导出页面: ' + selected.length);
+      updateProgress('开始抓取已勾选目录页面...');
 
       updateExportStage('页面抓取', 0, selected.length);
       const fetchedPages = new Array(selected.length);

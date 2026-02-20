@@ -256,6 +256,76 @@ test('parseNavigationLinksFromDocument collects sidebar category links and skips
   ]);
 });
 
+test('parseNavigationLinksFromDocument prioritizes data-left-nav container links', () => {
+  const leftNavAnchors = [
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/codex' : '';
+      },
+      closest() {
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/codex/quickstart' : '';
+      },
+      closest() {
+        return null;
+      }
+    }
+  ];
+
+  const globalNavAnchors = [
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/pricing' : '';
+      },
+      closest() {
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/blog' : '';
+      },
+      closest() {
+        return null;
+      }
+    }
+  ];
+
+  const leftNavScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? leftNavAnchors : [];
+    }
+  };
+
+  const globalNavScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? globalNavAnchors : [];
+    }
+  };
+
+  const mockDoc = {
+    querySelectorAll(selector) {
+      if (selector === '[data-left-nav-container]') {
+        return [leftNavScope];
+      }
+      if (selector === 'nav') {
+        return [globalNavScope];
+      }
+      return [];
+    }
+  };
+
+  const links = crawler.parseNavigationLinksFromDocument(mockDoc, 'https://developers.openai.com/codex');
+  assert.deepEqual(links, [
+    'https://developers.openai.com/codex',
+    'https://developers.openai.com/codex/quickstart'
+  ]);
+});
+
 test('parseCategoryLinksFromDocument collects top category links under docs root', () => {
   const categoryAnchors = [
     {
