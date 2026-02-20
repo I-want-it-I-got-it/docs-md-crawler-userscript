@@ -326,6 +326,112 @@ test('parseNavigationLinksFromDocument prioritizes data-left-nav container links
   ]);
 });
 
+test('parseNavigationLinksFromDocument prioritizes VitePress sidebar over generic nav links', () => {
+  const sidebarAnchors = [
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/backend/' : '';
+      },
+      closest() {
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/backend/getting-started.html' : '';
+      },
+      closest() {
+        return null;
+      }
+    }
+  ];
+
+  const globalNavAnchors = [
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/pricing' : '';
+      },
+      closest() {
+        return null;
+      }
+    }
+  ];
+
+  const sidebarScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? sidebarAnchors : [];
+    }
+  };
+
+  const globalScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? globalNavAnchors : [];
+    }
+  };
+
+  const mockDoc = {
+    querySelectorAll(selector) {
+      if (selector === '.VPSidebar') {
+        return [sidebarScope];
+      }
+      if (selector === 'nav') {
+        return [globalScope];
+      }
+      return [];
+    }
+  };
+
+  const links = crawler.parseNavigationLinksFromDocument(mockDoc, 'https://ruoyi.plus/backend/');
+  assert.deepEqual(links, [
+    'https://ruoyi.plus/backend',
+    'https://ruoyi.plus/backend/getting-started.html'
+  ]);
+});
+
+test('parseNavigationEntriesFromDocument keeps sidebar anchor text as title', () => {
+  const sidebarAnchors = [
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/backend/' : '';
+      },
+      textContent: '项目简介',
+      closest() {
+        return null;
+      }
+    },
+    {
+      getAttribute(name) {
+        return name === 'href' ? '/backend/getting-started.html' : '';
+      },
+      textContent: '快速启动',
+      closest() {
+        return null;
+      }
+    }
+  ];
+
+  const sidebarScope = {
+    querySelectorAll(selector) {
+      return selector === 'a[href]' ? sidebarAnchors : [];
+    }
+  };
+
+  const mockDoc = {
+    querySelectorAll(selector) {
+      if (selector === '.VPSidebar') {
+        return [sidebarScope];
+      }
+      return [];
+    }
+  };
+
+  const entries = crawler.parseNavigationEntriesFromDocument(mockDoc, 'https://ruoyi.plus/backend/');
+  assert.deepEqual(entries, [
+    { url: 'https://ruoyi.plus/backend', title: '项目简介' },
+    { url: 'https://ruoyi.plus/backend/getting-started.html', title: '快速启动' }
+  ]);
+});
+
 test('parseCategoryLinksFromDocument collects top category links under docs root', () => {
   const categoryAnchors = [
     {

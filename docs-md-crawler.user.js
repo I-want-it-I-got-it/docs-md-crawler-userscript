@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Docs Markdown Crawler (Manual Scan)
 // @namespace    https://github.com/yourname/docs-md-crawler
-// @version      0.2.17
+// @version      0.2.18
 // @description  Manually scan docs pages on the current site and export Markdown ZIP
 // @match        *://*/*
 // @run-at       document-idle
@@ -1487,6 +1487,29 @@
       return scopes;
     }
 
+    const frameworkSidebarSelectors = [
+      '#VPSidebarNav',
+      '.VPSidebar',
+      'aside.VPSidebar',
+      '.vp-sidebar',
+      '.theme-doc-sidebar',
+      '#sidebar'
+    ];
+
+    frameworkSidebarSelectors.forEach((selector) => {
+      doc.querySelectorAll(selector).forEach((node) => {
+        if (!node || seen.has(node)) {
+          return;
+        }
+        seen.add(node);
+        scopes.push(node);
+      });
+    });
+
+    if (scopes.length) {
+      return scopes;
+    }
+
     const selectors = [
       'aside nav',
       'aside',
@@ -1824,15 +1847,50 @@
     return !isLikelyDocUrlByStructure(url);
   }
 
-  function parseLinksFromDocument(doc, baseUrl, options) {
+  function normalizeInlineText(value) {
+    return String(value || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function extractNodeText(node) {
+    if (!node) {
+      return '';
+    }
+    if (typeof node.cloneNode === 'function' && typeof node.querySelectorAll === 'function') {
+      const clone = node.cloneNode(true);
+      clone.querySelectorAll('rt').forEach((el) => el.remove());
+      return normalizeInlineText(clone.textContent || '');
+    }
+    return normalizeInlineText(node.textContent || '');
+  }
+
+  function extractAnchorTitle(anchor) {
+    if (!anchor) {
+      return '';
+    }
+    if (typeof anchor.querySelector === 'function') {
+      const selectors = ['[data-docs-md-title]', '.text', '.link-text', 'p', 'span'];
+      for (const selector of selectors) {
+        const node = anchor.querySelector(selector);
+        const text = extractNodeText(node);
+        if (text) {
+          return text;
+        }
+      }
+    }
+    return extractNodeText(anchor);
+  }
+
+  function parseLinkEntriesFromDocument(doc, baseUrl, options) {
     const opts = options || {};
     const preferContentScopes = opts.preferContentScopes !== false;
     const skipFooterLinks = opts.skipFooterLinks !== false;
     const footerSelector = 'footer,[role="contentinfo"],#footer,.footer,.site-footer,[id*="footer" i],[class*="footer" i]';
-    const links = [];
+    const entries = [];
     const unique = new Set();
     if (!doc || typeof doc.querySelectorAll !== 'function') {
-      return links;
+      return entries;
     }
 
     const scopes = getLinkScopeNodes(doc, preferContentScopes);
@@ -1847,27 +1905,35 @@
         if (!absolute) {
           return;
         }
-        if (unique.has(absolute)) {
+        const normalized = normalizeUrl(absolute) || absolute;
+        if (unique.has(normalized)) {
           return;
         }
-        unique.add(absolute);
-        links.push(absolute);
+        unique.add(normalized);
+        entries.push({
+          url: normalized,
+          title: getDisplayTitle(normalized, extractAnchorTitle(a))
+        });
       });
     });
-    return links;
+    return entries;
   }
 
-  function parseNavigationLinksFromDocument(doc, baseUrl, options) {
+  function parseLinksFromDocument(doc, baseUrl, options) {
+    return parseLinkEntriesFromDocument(doc, baseUrl, options).map((item) => item.url);
+  }
+
+  function parseNavigationEntriesFromDocument(doc, baseUrl, options) {
     const opts = options || {};
     const skipHeaderLinks = opts.skipHeaderLinks !== false;
     const skipFooterLinks = opts.skipFooterLinks !== false;
     const headerSelector = 'header,[role="banner"],.site-header,.top-nav';
     const footerSelector = 'footer,[role="contentinfo"],#footer,.footer,.site-footer,[id*="footer" i],[class*="footer" i]';
-    const links = [];
+    const entries = [];
     const unique = new Set();
 
     if (!doc || typeof doc.querySelectorAll !== 'function') {
-      return links;
+      return entries;
     }
 
     const scopes = getNavigationScopeNodes(doc);
@@ -1890,15 +1956,23 @@
         if (!absolute) {
           return;
         }
-        if (unique.has(absolute)) {
+        const normalized = normalizeUrl(absolute) || absolute;
+        if (unique.has(normalized)) {
           return;
         }
-        unique.add(absolute);
-        links.push(absolute);
+        unique.add(normalized);
+        entries.push({
+          url: normalized,
+          title: getDisplayTitle(normalized, extractAnchorTitle(a))
+        });
       });
     });
 
-    return links;
+    return entries;
+  }
+
+  function parseNavigationLinksFromDocument(doc, baseUrl, options) {
+    return parseNavigationEntriesFromDocument(doc, baseUrl, options).map((item) => item.url);
   }
 
   function parseCategoryLinksFromDocument(doc, baseUrl, options) {
@@ -1972,11 +2046,25 @@
     return parseLinksFromDocument(document, baseUrl);
   }
 
+  function collectVisibleEntriesFromCurrentPage(baseUrl) {
+    if (typeof document === 'undefined') {
+      return [];
+    }
+    return parseLinkEntriesFromDocument(document, baseUrl);
+  }
+
   function collectNavigationLinksFromCurrentPage(baseUrl) {
     if (typeof document === 'undefined') {
       return [];
     }
     return parseNavigationLinksFromDocument(document, baseUrl);
+  }
+
+  function collectNavigationEntriesFromCurrentPage(baseUrl) {
+    if (typeof document === 'undefined') {
+      return [];
+    }
+    return parseNavigationEntriesFromDocument(document, baseUrl);
   }
 
   function collectCategoryLinksFromCurrentPage(baseUrl, options) {
@@ -2178,7 +2266,9 @@
     return {
       normalizeUrl,
       parseLinksFromDocument,
+      parseLinkEntriesFromDocument,
       parseNavigationLinksFromDocument,
+      parseNavigationEntriesFromDocument,
       parseCategoryLinksFromDocument,
       deriveCategoryPathPrefixes,
       matchesAnyPathPrefix,
@@ -3156,6 +3246,7 @@
     const requestLimiter = options.requestLimiter || null;
     const htmlCache = options.htmlCache instanceof Map ? options.htmlCache : null;
     const excludePatterns = options.excludePatterns || [];
+    const seedTitleEntries = Array.isArray(options.seedTitleEntries) ? options.seedTitleEntries : [];
     const seedLinks = Array.isArray(options.seedLinks) ? options.seedLinks : [];
     const navigationSeedLinks = Array.isArray(options.navigationSeedLinks) ? options.navigationSeedLinks : [];
     const categorySeedLinks = Array.isArray(options.categorySeedLinks) ? options.categorySeedLinks : [];
@@ -3201,6 +3292,17 @@
 
     const discovered = new Set();
     const titles = new Map();
+    seedTitleEntries.forEach((item) => {
+      if (!item || typeof item !== 'object') {
+        return;
+      }
+      const normalized = normalizeUrl(item.url);
+      const rawTitle = String(item.title || '').trim();
+      if (!normalized || !rawTitle || titles.has(normalized)) {
+        return;
+      }
+      titles.set(normalized, rawTitle);
+    });
     const visited = new Set();
     const queued = new Set();
     const queue = [];
@@ -3431,21 +3533,29 @@
 
     const startUrl = normalizeUrl(location.href) || location.href;
     const baseDocRootPath = getDocRootPathFromUrl(startUrl);
-    const navigationLinks = collectNavigationLinksFromCurrentPage(startUrl);
-    const docsRootPath = inferDocsRootPath(
-      startUrl,
-      navigationLinks,
-      baseDocRootPath
-    );
-    const categoryPathPrefixes = deriveCategoryPathPrefixes(startUrl, navigationLinks, docsRootPath);
+    const navigationEntries = collectNavigationEntriesFromCurrentPage(startUrl);
+    const hasNavigationEntries = navigationEntries.length > 0;
+    const fallbackVisibleEntries = hasNavigationEntries ? [] : collectVisibleEntriesFromCurrentPage(startUrl);
+    const scanSeedEntries = hasNavigationEntries ? navigationEntries : fallbackVisibleEntries;
+    const scanSeedLinks = scanSeedEntries.map((item) => item.url);
+    const docsRootPath = hasNavigationEntries
+      ? inferDocsRootPath(startUrl, scanSeedLinks, baseDocRootPath)
+      : '/';
+    const categoryPathPrefixes = hasNavigationEntries
+      ? deriveCategoryPathPrefixes(startUrl, scanSeedLinks, docsRootPath)
+      : [];
     state.scanStartUrl = startUrl;
     resetExportProgress();
     clearDiagnosticLogs();
     addDiagnosticLog('SCAN', '开始扫描，起始地址: ' + startUrl);
     addDiagnosticLog('SCAN', '文档根路径: ' + docsRootPath);
-    addDiagnosticLog('SCAN', '左侧目录链接: ' + navigationLinks.length);
-    addDiagnosticLog('SCAN', '分类路径前缀: ' + categoryPathPrefixes.join(', '));
-    addDiagnosticLog('SCAN', '扫描策略: 基于左侧目录快速扫描（仅发现 URL，不抓取页面内容）');
+    addDiagnosticLog('SCAN', '链接来源: ' + (hasNavigationEntries ? '左侧目录' : '正文回退'));
+    addDiagnosticLog('SCAN', (hasNavigationEntries ? '左侧目录链接: ' : '正文链接: ') + scanSeedLinks.length);
+    if (!hasNavigationEntries) {
+      addDiagnosticLog('WARN', '未检测到左侧目录，已回退正文链接采集');
+    }
+    addDiagnosticLog('SCAN', '分类路径前缀: ' + (categoryPathPrefixes.length ? categoryPathPrefixes.join(', ') : '(none)'));
+    addDiagnosticLog('SCAN', '扫描策略: 快速目录扫描（仅发现 URL，不抓取页面内容）');
 
     state.scanning = true;
     resetPauseState();
@@ -3488,9 +3598,10 @@
         startUrl,
         maxDepth: DEFAULTS.maxDepth,
         excludePatterns: DEFAULT_EXCLUDES,
-        seedLinks: navigationLinks,
+        seedTitleEntries: scanSeedEntries,
+        seedLinks: scanSeedLinks,
         navigationSeedLinks: [],
-        categorySeedLinks: navigationLinks,
+        categorySeedLinks: scanSeedLinks,
         categoryPathPrefixes,
         docsRootPath,
         crawlDescendantsOnly: true,
